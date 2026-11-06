@@ -1,0 +1,6 @@
+[project]
+name = "cookies"
+entry = "mod.mire"
+
+[exports]
+cookies = "mod.mire"

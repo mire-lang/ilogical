@@ -1,0 +1,57 @@
+module format
+
+// ilogical::format — codecs for JSON, TOML, and binary formats.
+// All decode into the common base::Value representation.
+
+load ilogical::base
+
+// ── JSON ────────────────────────────────────────────────────────
+
+pub fn json_decode: (s :str) :i64 {
+    // Simple JSON parser - delegates to runtime
+    return rt_json_decode(s)
+}
+
+pub fn json_encode: (v :i64) :str {
+    // Simple JSON encoder - delegates to runtime
+    return rt_json_encode(v)
+}
+
+pub fn json_encode_pretty: (v :i64, indent :str) :str {
+    return rt_json_encode_pretty(v, indent)
+}
+
+// ── TOML ────────────────────────────────────────────────────────
+
+pub fn toml_decode: (s :str) :i64 {
+    return rt_toml_decode(s)
+}
+
+pub fn toml_encode: (v :i64) :str {
+    return rt_toml_encode(v)
+}
+
+// ── Binary (MessagePack-inspired) ──────────────────────────────
+
+pub fn bin_decode: (data :&ptr, len :i64) :i64 {
+    return rt_bin_decode(data, len)
+}
+
+pub fn bin_encode: (v :i64) :i64 {
+    // Returns handle to binary buffer
+    return rt_bin_encode(v)
+}
+
+pub fn bin_encode_to_ptr: (v :i64, out :&mut ptr, out_len :&mut i64) {
+    rt_bin_encode_to_ptr(v, out, out_len)
+}
+
+// Extern declarations for runtime functions
+extern fn rt_json_decode: (s :str) :i64 lib "pal"
+extern fn rt_json_encode: (v :i64) :str lib "pal"
+extern fn rt_json_encode_pretty: (v :i64, indent :str) :str lib "pal"
+extern fn rt_toml_decode: (s :str) :i64 lib "pal"
+extern fn rt_toml_encode: (v :i64) :str lib "pal"
+extern fn rt_bin_decode: (data :&ptr, len :i64) :i64 lib "pal"
+extern fn rt_bin_encode: (v :i64) :i64 lib "pal"
+extern fn rt_bin_encode_to_ptr: (v :i64, out :&mut ptr, out_len :&mut i64) lib "pal"

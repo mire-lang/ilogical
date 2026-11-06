@@ -1,0 +1,6 @@
+[project]
+name = "response"
+entry = "mod.mire"
+
+[exports]
+response = "mod.mire"

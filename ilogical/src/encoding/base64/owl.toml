@@ -1,0 +1,6 @@
+[project]
+name = "base64"
+entry = "mod.mire"
+
+[exports]
+base64 = "mod.mire"

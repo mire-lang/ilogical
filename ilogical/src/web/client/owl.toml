@@ -1,0 +1,6 @@
+[project]
+name = "client"
+entry = "mod.mire"
+
+[exports]
+client = "mod.mire"

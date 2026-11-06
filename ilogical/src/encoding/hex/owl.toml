@@ -1,0 +1,6 @@
+[project]
+name = "hex"
+entry = "mod.mire"
+
+[exports]
+hex = "mod.mire"

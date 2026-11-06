@@ -1,0 +1,678 @@
+module base
+
+// ilogical::base — a single dynamic value type shared by every format.
+//
+// DESIGN: A Value is a handle (i64) to a 64-byte heap record. The record is
+// allocated with mire::bytes and never moved. All operations take the handle
+// as i64 directly. Arrays and objects use custom dynamic buffers (not mire::vec)
+// to avoid ownership issues with Mire's arena allocator.
+
+load mire::bytes
+load mire::aux::pal
+load mire::str
+
+extern fn rt_i64_to_string: (value :i64) :str lib "pal"
+extern fn rt_f64_to_string: (value :f64) :str lib "pal"
+
+cons K_NULL = 0
+cons K_BOOL = 1
+cons K_INT = 2
+cons K_FLOAT = 3
+cons K_STRING = 4
+cons K_ARRAY = 5
+cons K_OBJECT = 6
+cons K_BYTES = 7
+cons K_ERROR = 8
+
+cons RECORD_SIZE = 64
+cons OFF_KIND = 0
+cons OFF_INT = 8
+cons OFF_FLOAT = 16
+cons OFF_STRING = 24
+cons OFF_ARRAY = 32
+cons OFF_KEYS = 40
+cons OFF_VALS = 48
+cons OFF_LEN = 56
+
+// Helper to write u64 at offset using pal::ptr_add (avoids bytes::write_u64 bug)
+fn write_u64_off: (base :ptr, offset :i64, value :i64) {
+    set p = pal::ptr_add(base, offset)
+    pal::write_u64(p, value)
+}
+
+// Helper to read u64 at offset
+fn read_u64_off: (base :ptr, offset :i64) :i64 {
+    set p = pal::ptr_add(base, offset)
+    return pal::read_u64(p)
+}
+
+// ── Array buffer management ─────────────────────────────────────
+// Array buffer layout:
+//   offset 0: capacity (i64)
+//   offset 8: length (i64)
+//   offset 16: data[i64] * capacity
+
+fn array_buf_alloc: (capacity :i64) :ptr {
+    set size = 16 + capacity * 8
+    set buf = bytes::alloc(size)
+    set p = buf
+    pal::write_u64(p, capacity)  // capacity at offset 0
+    pal::write_u64(pal::ptr_add(p, 8), 0)  // length at offset 8
+    return buf
+}
+
+fn array_buf_capacity: (buf :ptr) :i64 {
+    return pal::read_u64(buf)
+}
+
+fn array_buf_length: (buf :ptr) :i64 {
+    return pal::read_u64(pal::ptr_add(buf, 8))
+}
+
+fn array_buf_set_length: (buf :ptr, len :i64) {
+    pal::write_u64(pal::ptr_add(buf, 8), len)
+}
+
+fn array_buf_get: (buf :ptr, index :i64) :i64 {
+    set data = pal::ptr_add(buf, 16)
+    set p = pal::ptr_add(data, index * 8)
+    return pal::read_u64(p)
+}
+
+fn array_buf_set: (buf :ptr, index :i64, value :i64) {
+    set data = pal::ptr_add(buf, 16)
+    set p = pal::ptr_add(data, index * 8)
+    pal::write_u64(p, value)
+}
+
+fn array_buf_push: (buf :ptr, value :i64) :ptr {
+    set len = array_buf_length(buf)
+    set cap = array_buf_capacity(buf)
+    if len < cap {
+        array_buf_set(buf, len, value)
+        array_buf_set_length(buf, len + 1)
+        return buf
+    }
+    // Need to grow - allocate new buffer with 2x capacity
+    set new_cap = cap * 2
+    if new_cap == 0 { set new_cap2 = 4 } else { set new_cap2 = new_cap }
+    set new_buf = array_buf_alloc(new_cap2)
+    // Copy existing elements
+    set i = 0 :i64 mut
+    while i < len {
+        set val = array_buf_get(buf, i)
+        array_buf_set(new_buf, i, val)
+        set i = i + 1
+    }
+    // Add new element
+    array_buf_set(new_buf, len, value)
+    array_buf_set_length(new_buf, len + 1)
+    return new_buf
+}
+
+fn array_buf_clone: (buf :ptr) :ptr {
+    set len = array_buf_length(buf)
+    set cap = array_buf_capacity(buf)
+    set new_buf = array_buf_alloc(cap)
+    set i = 0 :i64 mut
+    while i < len {
+        set val = array_buf_get(buf, i)
+        array_buf_set(new_buf, i, val)
+        set i = i + 1
+    }
+    array_buf_set_length(new_buf, len)
+    return new_buf
+}
+
+// ── Object buffer management ────────────────────────────────────
+// Object buffer layout:
+//   offset 0: capacity (i64)
+//   offset 8: length (i64)
+//   offset 16: keys[ptr] * capacity
+//   offset 16 + cap*8: values[i64] * capacity
+
+fn object_buf_alloc: (capacity :i64) :ptr {
+    set keys_off = 16
+    set vals_off = 16 + capacity * 8
+    set size = vals_off + capacity * 8
+    set buf = bytes::alloc(size)
+    set p = buf
+    pal::write_u64(p, capacity)
+    pal::write_u64(pal::ptr_add(p, 8), 0)
+    return buf
+}
+
+fn object_buf_capacity: (buf :ptr) :i64 {
+    return pal::read_u64(buf)
+}
+
+fn object_buf_length: (buf :ptr) :i64 {
+    return pal::read_u64(pal::ptr_add(buf, 8))
+}
+
+fn object_buf_set_length: (buf :ptr, len :i64) {
+    pal::write_u64(pal::ptr_add(buf, 8), len)
+}
+
+fn object_buf_get_key_ptr: (buf :ptr) :ptr {
+    return pal::ptr_add(buf, 16)
+}
+
+fn object_buf_get_val_ptr: (buf :ptr) :ptr {
+    set cap = object_buf_capacity(buf)
+    return pal::ptr_add(buf, 16 + cap * 8)
+}
+
+fn object_buf_get_key: (buf :ptr, index :i64) :ptr {
+    set keys = object_buf_get_key_ptr(buf)
+    set p = pal::ptr_add(keys, index * 8)
+    set raw = pal::read_u64(p)
+    return raw :ptr
+}
+
+fn object_buf_get_val: (buf :ptr, index :i64) :i64 {
+    set vals = object_buf_get_val_ptr(buf)
+    set p = pal::ptr_add(vals, index * 8)
+    return pal::read_u64(p)
+}
+
+fn object_buf_set_key: (buf :ptr, index :i64, key :ptr) {
+    set keys = object_buf_get_key_ptr(buf)
+    set p = pal::ptr_add(keys, index * 8)
+    pal::write_u64(p, key :i64)
+}
+
+fn object_buf_set_val: (buf :ptr, index :i64, value :i64) {
+    set vals = object_buf_get_val_ptr(buf)
+    set p = pal::ptr_add(vals, index * 8)
+    pal::write_u64(p, value)
+}
+
+fn object_buf_find: (buf :ptr, key :&str) :i64 {
+    set len = object_buf_length(buf)
+    set i = 0 :i64 mut
+    while i < len {
+        set kptr = object_buf_get_key(buf, i)
+        set k = kptr :ptr
+        set kstr = str::copy(k :str)
+        if kstr == *key { return i }
+        set i = i + 1
+    }
+    return -1
+}
+
+fn object_buf_push: (buf :ptr, key :ptr, value :i64) :ptr {
+    set len = object_buf_length(buf)
+    set cap = object_buf_capacity(buf)
+    if len < cap {
+        object_buf_set_key(buf, len, key)
+        object_buf_set_val(buf, len, value)
+        object_buf_set_length(buf, len + 1)
+        return buf
+    }
+    set new_cap = cap * 2
+    if new_cap == 0 { set new_cap2 = 4 } else { set new_cap2 = new_cap }
+    set keys_off = 16
+    set vals_off = 16 + new_cap2 * 8
+    set size = vals_off + new_cap2 * 8
+    set new_buf = bytes::alloc(size)
+    set p = new_buf
+    pal::write_u64(p, new_cap2)
+    pal::write_u64(pal::ptr_add(p, 8), len + 1)
+    // Copy existing
+    set i = 0 :i64 mut
+    while i < len {
+        set k = object_buf_get_key(buf, i)
+        set v = object_buf_get_val(buf, i)
+        object_buf_set_key(new_buf, i, k)
+        object_buf_set_val(new_buf, i, v)
+        set i = i + 1
+    }
+    // Add new
+    object_buf_set_key(new_buf, len, key)
+    object_buf_set_val(new_buf, len, value)
+    return new_buf
+}
+
+fn object_buf_clone: (buf :ptr) :ptr {
+    set len = object_buf_length(buf)
+    set cap = object_buf_capacity(buf)
+    set keys_off = 16
+    set vals_off = 16 + cap * 8
+    set size = vals_off + cap * 8
+    set new_buf = bytes::alloc(size)
+    set p = new_buf
+    pal::write_u64(p, cap)
+    pal::write_u64(pal::ptr_add(p, 8), len)
+    set i = 0 :i64 mut
+    while i < len {
+        set k = object_buf_get_key(buf, i)
+        set v = object_buf_get_val(buf, i)
+        object_buf_set_key(new_buf, i, k)
+        object_buf_set_val(new_buf, i, v)
+        set i = i + 1
+    }
+    return new_buf
+}
+
+// ── Constructors ────────────────────────────────────────────────
+pub fn null: () :i64 {
+    set buf = bytes::alloc(RECORD_SIZE)
+    set h = buf :i64
+    set base = buf
+    write_u64_off(base, OFF_KIND, K_NULL)
+    write_u64_off(base, OFF_INT, 0)
+    write_u64_off(base, OFF_FLOAT, 0)
+    write_u64_off(base, OFF_STRING, 0)
+    write_u64_off(base, OFF_ARRAY, 0)
+    write_u64_off(base, OFF_KEYS, 0)
+    write_u64_off(base, OFF_VALS, 0)
+    write_u64_off(base, OFF_LEN, 0)
+    return h
+}
+
+pub fn bool: (b :bool) :i64 {
+    set h = null()
+    set base = h :ptr
+    write_u64_off(base, OFF_KIND, K_BOOL)
+    write_u64_off(base, OFF_INT, if b { 1 } else { 0 })
+    return h
+}
+
+pub fn int: (n :i64) :i64 {
+    set h = null()
+    set base = h :ptr
+    write_u64_off(base, OFF_KIND, K_INT)
+    write_u64_off(base, OFF_INT, n)
+    return h
+}
+
+pub fn float: (f :f64) :i64 {
+    set h = null()
+    set base = h :ptr
+    write_u64_off(base, OFF_KIND, K_FLOAT)
+    set bits = bits::i64(f)
+    write_u64_off(base, OFF_FLOAT, bits)
+    return h
+}
+
+pub fn string: (s :str) :i64 {
+    set h = null()
+    set base = h :ptr
+    write_u64_off(base, OFF_KIND, K_STRING)
+    set sp = s :ptr
+    write_u64_off(base, OFF_STRING, sp :i64)
+    return h
+}
+
+pub fn error: (msg :str) :i64 {
+    set h = string(msg)
+    set base = h :ptr
+    write_u64_off(base, OFF_KIND, K_ERROR)
+    return h
+}
+
+pub fn array: () :i64 {
+    set h = null()
+    set base = h :ptr
+    write_u64_off(base, OFF_KIND, K_ARRAY)
+    set arr_buf = array_buf_alloc(4)
+    write_u64_off(base, OFF_ARRAY, arr_buf :i64)
+    write_u64_off(base, OFF_LEN, 0)
+    return h
+}
+
+pub fn object: () :i64 {
+    set h = null()
+    set base = h :ptr
+    write_u64_off(base, OFF_KIND, K_OBJECT)
+    set obj_buf = object_buf_alloc(4)
+    write_u64_off(base, OFF_KEYS, obj_buf :i64)
+    write_u64_off(base, OFF_VALS, obj_buf :i64)
+    write_u64_off(base, OFF_LEN, 0)
+    return h
+}
+
+pub fn blob: (data :&ptr, length :i64) :i64 {
+    set h = null()
+    set base = h :ptr
+    write_u64_off(base, OFF_KIND, K_BYTES)
+    set copy = bytes::alloc(length)
+    set i = 0 :i64 mut
+    while i < length {
+        set b = bytes::get_u8(data, i)
+        bytes::set_u8(copy, i, b)
+        set i = i + 1
+    }
+    write_u64_off(base, OFF_STRING, copy :i64)
+    write_u64_off(base, OFF_LEN, length)
+    return h
+}
+
+// ── Type inspection ─────────────────────────────────────────────
+pub fn kind: (h :i64) :i64 {
+    set base = h :ptr
+    return read_u64_off(base, OFF_KIND)
+}
+
+pub fn is_null: (h :i64) :bool { return kind(h) == K_NULL }
+pub fn is_bool: (h :i64) :bool { return kind(h) == K_BOOL }
+pub fn is_int: (h :i64) :bool { return kind(h) == K_INT }
+pub fn is_float: (h :i64) :bool { return kind(h) == K_FLOAT }
+pub fn is_string: (h :i64) :bool { return kind(h) == K_STRING }
+pub fn is_array: (h :i64) :bool { return kind(h) == K_ARRAY }
+pub fn is_object: (h :i64) :bool { return kind(h) == K_OBJECT }
+pub fn is_bytes: (h :i64) :bool { return kind(h) == K_BYTES }
+pub fn is_error: (h :i64) :bool { return kind(h) == K_ERROR }
+
+pub fn type_name: (h :i64) :str {
+    set k = kind(h)
+    if k == K_NULL { return "null" }
+    if k == K_BOOL { return "bool" }
+    if k == K_INT { return "int" }
+    if k == K_FLOAT { return "float" }
+    if k == K_STRING { return "string" }
+    if k == K_ARRAY { return "array" }
+    if k == K_OBJECT { return "object" }
+    if k == K_BYTES { return "bytes" }
+    if k == K_ERROR { return "error" }
+    return "unknown"
+}
+
+// ── Array operations ────────────────────────────────────────────
+pub fn array_len: (h :i64) :i64 {
+    set base = h :ptr
+    set arr_buf = read_u64_off(base, OFF_ARRAY) :ptr
+    if arr_buf == 0 { return 0 }
+    return array_buf_length(arr_buf :ptr)
+}
+
+pub fn array_get: (h :i64, index :i64) :i64 {
+    if kind(h) != K_ARRAY { return null() }
+    set base = h :ptr
+    set arr_buf = read_u64_off(base, OFF_ARRAY) :ptr
+    if arr_buf == 0 { return null() }
+    set len = array_buf_length(arr_buf :ptr)
+    if index < 0 { return null() }
+    if index >= len { return null() }
+    return array_buf_get(arr_buf :ptr, index)
+}
+
+pub fn array_push: (h :i64, item :i64) :i64 {
+    set base = h :ptr
+    set k = read_u64_off(base, OFF_KIND)
+    if k != K_ARRAY { return h }
+    set arr_buf_i64 = read_u64_off(base, OFF_ARRAY)
+    if arr_buf_i64 == 0 {
+        set arr_buf = array_buf_alloc(4)
+        write_u64_off(base, OFF_ARRAY, arr_buf :i64)
+    } else {
+        set arr_buf = arr_buf_i64 :ptr
+    }
+    set new_buf = array_buf_push(arr_buf, item)
+    if new_buf != arr_buf {
+        write_u64_off(base, OFF_ARRAY, new_buf :i64)
+    }
+    write_u64_off(base, OFF_LEN, array_buf_length(new_buf))
+    return h
+}
+
+// ── Object operations ──────────────────────────────────────────
+pub fn object_len: (h :i64) :i64 {
+    set base = h :ptr
+    set obj_buf = read_u64_off(base, OFF_KEYS) :ptr
+    if obj_buf == 0 { return 0 }
+    return object_buf_length(obj_buf :ptr)
+}
+
+pub fn object_has: (h :i64, key :&str) :bool {
+    if kind(h) != K_OBJECT { return false }
+    set base = h :ptr
+    set obj_buf = read_u64_off(base, OFF_KEYS) :ptr
+    if obj_buf == 0 { return false }
+    return object_buf_find(obj_buf :ptr, key) >= 0
+}
+
+pub fn object_get: (h :i64, key :&str) :i64 {
+    if kind(h) != K_OBJECT { return null() }
+    set base = h :ptr
+    set obj_buf = read_u64_off(base, OFF_KEYS) :ptr
+    if obj_buf == 0 { return null() }
+    set idx = object_buf_find(obj_buf :ptr, key)
+    if idx < 0 { return null() }
+    return object_buf_get_val(obj_buf :ptr, idx)
+}
+
+pub fn object_key_at: (h :i64, index :i64) :str {
+    if kind(h) != K_OBJECT { return "" }
+    set base = h :ptr
+    set obj_buf = read_u64_off(base, OFF_KEYS) :ptr
+    if obj_buf == 0 { return "" }
+    set len = object_buf_length(obj_buf :ptr)
+    if index < 0 { return "" }
+    if index >= len { return "" }
+    set kptr = object_buf_get_key(obj_buf :ptr, index)
+    set k = kptr :ptr
+    return str::copy(k :str)
+}
+
+pub fn object_value_at: (h :i64, index :i64) :i64 {
+    if kind(h) != K_OBJECT { return null() }
+    set base = h :ptr
+    set obj_buf = read_u64_off(base, OFF_KEYS) :ptr
+    if obj_buf == 0 { return null() }
+    set len = object_buf_length(obj_buf :ptr)
+    if index < 0 { return null() }
+    if index >= len { return null() }
+    return object_buf_get_val(obj_buf :ptr, index)
+}
+
+pub fn object_set: (h :i64, key :str, item :i64) :i64 {
+    set base = h :ptr
+    set k = read_u64_off(base, OFF_KIND)
+    if k != K_OBJECT { return h }
+    set obj_buf_i64 = read_u64_off(base, OFF_KEYS)
+    if obj_buf_i64 == 0 {
+        set obj_buf = object_buf_alloc(4)
+        write_u64_off(base, OFF_KEYS, obj_buf :i64)
+        write_u64_off(base, OFF_VALS, obj_buf :i64)
+    } else {
+        set obj_buf = obj_buf_i64 :ptr
+    }
+    set key_ptr = str::copy(key) :ptr
+    set idx = object_buf_find(obj_buf, key)
+    if idx >= 0 {
+        object_buf_set_val(obj_buf, idx, item)
+    } else {
+        set new_buf = object_buf_push(obj_buf, key_ptr, item)
+        if new_buf != obj_buf {
+            write_u64_off(base, OFF_KEYS, new_buf :i64)
+            write_u64_off(base, OFF_VALS, new_buf :i64)
+            set obj_buf = new_buf
+        }
+    }
+    write_u64_off(base, OFF_LEN, object_buf_length(obj_buf))
+    return h
+}
+
+// ── Equality and cloning ────────────────────────────────────────
+pub fn equals: (a :i64, b :i64) :bool {
+    set ka = kind(a)
+    set kb = kind(b)
+    if ka != kb { return false }
+    if ka == K_NULL { return true }
+    if ka == K_BOOL { return as_bool(a) == as_bool(b) }
+    if ka == K_INT { return as_int(a) == as_int(b) }
+    if ka == K_FLOAT { return as_float(a) == as_float(b) }
+    if ka == K_STRING || ka == K_ERROR { return as_string(a) == as_string(b) }
+    if ka == K_ARRAY {
+        set la = array_len(a)
+        set lb = array_len(b)
+        if la != lb { return false }
+        set i = 0 :i64 mut
+        while i < la {
+            set va = array_get(a, i)
+            set vb = array_get(b, i)
+            if !equals(va, vb) { return false }
+            set i = i + 1
+        }
+        return true
+    }
+    if ka == K_OBJECT {
+        set la = object_len(a)
+        set lb = object_len(b)
+        if la != lb { return false }
+        set i = 0 :i64 mut
+        while i < la {
+            set key = object_key_at(a, i)
+            if !object_has(b, &key) { return false }
+            set va = object_value_at(a, i)
+            set vb = object_get(b, &key)
+            if !equals(va, vb) { return false }
+            set i = i + 1
+        }
+        return true
+    }
+    if ka == K_BYTES {
+        set la = as_bytes_len(a)
+        set lb = as_bytes_len(b)
+        if la != lb { return false }
+        set pa = as_bytes_ptr(a)
+        set pb = as_bytes_ptr(b)
+        set i = 0 :i64 mut
+        while i < la {
+            if bytes::get_u8(pa, i) != bytes::get_u8(pb, i) { return false }
+            set i = i + 1
+        }
+        return true
+    }
+    return false
+}
+
+pub fn clone: (h :i64) :i64 {
+    return clone_impl(h)
+}
+
+fn clone_impl: (h :i64) :i64 {
+    set k = kind(h)
+    if k == K_NULL { return null() }
+    if k == K_BOOL { return bool(as_bool(h)) }
+    if k == K_INT { return int(as_int(h)) }
+    if k == K_FLOAT { return float(as_float(h)) }
+    if k == K_STRING || k == K_ERROR { return string(as_string(h)) }
+    if k == K_ARRAY {
+        set base = h :ptr
+        set arr_buf = read_u64_off(base, OFF_ARRAY) :ptr
+        if arr_buf == 0 { return array() }
+        set new_arr = array_buf_clone(arr_buf :ptr)
+        set new_h = null()
+        set new_base = new_h :ptr
+        write_u64_off(new_base, OFF_KIND, K_ARRAY)
+        write_u64_off(new_base, OFF_ARRAY, new_arr :i64)
+        write_u64_off(new_base, OFF_LEN, array_buf_length(new_arr :ptr))
+        return new_h
+    }
+    if k == K_OBJECT {
+        set base = h :ptr
+        set obj_buf = read_u64_off(base, OFF_KEYS) :ptr
+        if obj_buf == 0 { return object() }
+        set new_obj = object_buf_clone(obj_buf :ptr)
+        set new_h = null()
+        set new_base = new_h :ptr
+        write_u64_off(new_base, OFF_KIND, K_OBJECT)
+        write_u64_off(new_base, OFF_KEYS, new_obj :i64)
+        write_u64_off(new_base, OFF_VALS, new_obj :i64)
+        write_u64_off(new_base, OFF_LEN, object_buf_length(new_obj :ptr))
+        return new_h
+    }
+    if k == K_BYTES {
+        set length = as_bytes_len(h)
+        set source = as_bytes_ptr(h)
+        return blob(&source, length)
+    }
+    return null()
+}
+
+// ── Accessors ───────────────────────────────────────────────────
+pub fn as_bool: (h :i64) :bool {
+    if kind(h) != K_BOOL { return false }
+    set base = h :ptr
+    return read_u64_off(base, OFF_INT) != 0
+}
+
+pub fn as_int: (h :i64) :i64 {
+    if kind(h) != K_INT { return 0 }
+    set base = h :ptr
+    return read_u64_off(base, OFF_INT)
+}
+
+pub fn as_float: (h :i64) :f64 {
+    if kind(h) != K_FLOAT { return 0.0 }
+    set base = h :ptr
+    set bits = read_u64_off(base, OFF_FLOAT)
+    return bits::f64(bits)
+}
+
+pub fn as_string: (h :i64) :str {
+    set k = kind(h)
+    if k != K_STRING && k != K_ERROR { return "" }
+    set base = h :ptr
+    set sp = read_u64_off(base, OFF_STRING)
+    set s = sp :ptr
+    return str::copy(s :str)
+}
+
+fn as_bytes_ptr: (h :i64) :ptr {
+    set base = h :ptr
+    set raw = read_u64_off(base, OFF_STRING)
+    return raw :ptr
+}
+
+pub fn as_bytes_len: (h :i64) :i64 {
+    set base = h :ptr
+    return read_u64_off(base, OFF_LEN)
+}
+
+// ── Debug representation ────────────────────────────────────────
+pub fn to_string: (h :i64) :str {
+    set k = kind(h)
+    if k == K_NULL { return "null" }
+    if k == K_BOOL {
+        if as_bool(h) { return "true" }
+        return "false"
+    }
+    if k == K_INT { return rt_i64_to_string(as_int(h)) }
+    if k == K_FLOAT { return rt_f64_to_string(as_float(h)) }
+    if k == K_STRING || k == K_ERROR { return as_string(h) }
+    if k == K_ARRAY {
+        set out = "[" :str mut
+        set i = 0 :i64 mut
+        set n = array_len(h)
+        while i < n {
+            if i > 0 { set out = out + ", " }
+            set child = array_get(h, i)
+            set out = out + to_string(child)
+            set i = i + 1
+        }
+        return out + "]"
+    }
+    if k == K_OBJECT {
+        set out = "{" :str mut
+        set i = 0 :i64 mut
+        set n = object_len(h)
+        set first = true :bool mut
+        while i < n {
+            if !first { set out = out + ", " }
+            set first = false
+            set key = object_key_at(h, i)
+            set child = object_value_at(h, i)
+            set out = out + key + ": " + to_string(child)
+            set i = i + 1
+        }
+        return out + "}"
+    }
+    if k == K_BYTES {
+        return "<" + rt_i64_to_string(as_bytes_len(h)) + " bytes>"
+    }
+    return "<unknown>"
+}

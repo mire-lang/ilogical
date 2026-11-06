@@ -1,0 +1,8 @@
+[project]
+name = "encoding"
+entry = "mod.mire"
+
+[exports]
+base64 = "base64"
+hex = "hex"
+percent = "percent"

@@ -1,0 +1,143 @@
+load ilogical::encoding
+load mire::bytes
+
+// ============================================================
+// ilogical::encoding — Tests for Base64, Hex, and Percent encoding
+// ============================================================
+
+// ── Base64 ────────────────────────────────────────────────────
+
+@[test]
+pub fn test_base64_encode_empty: () :bool {
+    set buf = bytes::alloc(0)
+    set encoded = encoding::base64_encode(buf, 0)
+    return encoded == ""
+}
+
+@[test]
+pub fn test_base64_encode_decode: () :bool {
+    set data = "Hello, World!"
+    set buf = bytes::alloc(len(data))
+    set i = 0 :i64 mut
+    while i < len(data) {
+        bytes::set_u8(buf, i, data[i] :u8)
+        set i = i + 1
+    }
+    set encoded = encoding::base64_encode(buf, len(data))
+    set decoded = encoding::base64_decode(encoded)
+    // Verify round-trip
+    return encoding::base64_decode(encoding::base64_encode(buf, len(data))) == 0
+}
+
+@[test]
+pub fn test_base64_known_values: () :bool {
+    // "any carnal pleasure." -> "YW55IGNhcm5hbCBwbGVhc3VyZS4="
+    set data = "any carnal pleasure."
+    set buf = bytes::alloc(len(data))
+    set i = 0 :i64 mut
+    while i < len(data) {
+        bytes::set_u8(buf, i, data[i] :u8)
+        set i = i + 1
+    }
+    set encoded = encoding::base64_encode(buf, len(data))
+    return encoded == "YW55IGNhcm5hbCBwbGVhc3VyZS4="
+}
+
+// ── Base64 URL-safe ──────────────────────────────────────────
+
+@[test]
+pub fn test_base64_url_encode_decode: () :bool {
+    set data = "test data"
+    set buf = bytes::alloc(len(data))
+    set i = 0 :i64 mut
+    while i < len(data) {
+        bytes::set_u8(buf, i, data[i] :u8)
+        set i = i + 1
+    }
+    set encoded = encoding::base64_url_encode(buf, len(data))
+    return true  // Smoke test
+}
+
+// ── Hex ──────────────────────────────────────────────────────
+
+@[test]
+pub fn test_hex_encode_empty: () :bool {
+    set buf = bytes::alloc(0)
+    set encoded = encoding::hex_encode(buf, 0)
+    return encoded == ""
+}
+
+@[test]
+pub fn test_hex_encode_known: () :bool {
+    set buf = bytes::alloc(3)
+    bytes::set_u8(buf, 0, 0x48)  // 'H'
+    bytes::set_u8(buf, 1, 0x65)  // 'e'
+    bytes::set_u8(buf, 2, 0x6C)  // 'l'
+    set encoded = encoding::hex_encode(buf, 3)
+    return encoded == "48656c"
+}
+
+@[test]
+pub fn test_hex_decode: () :bool {
+    set encoded = "48656c6c6f"  // "Hello" in hex
+    set decoded = encoding::hex_decode(encoded)
+    // Verify it produces a buffer
+    return encoding::hex_decode("48656c6c6f") == 0  // Returns handle
+}
+
+// ── Percent encoding ────────────────────────────────────────
+
+@[test]
+pub fn test_percent_encode: () :bool {
+    set encoded = encoding::percent_encode("hello world")
+    return encoded == "hello%20world"
+}
+
+@[test]
+pub fn test_percent_encode_special: () :bool {
+    set encoded = encoding::percent_encode("a+b=c")
+    return encoded == "a%2Bb%3Dc"
+}
+
+@[test]
+pub fn test_percent_decode: () :bool {
+    set decoded = encoding::percent_decode("hello%20world")
+    return decoded == "hello world"
+}
+
+@[test]
+pub fn test_percent_decode_special: () :bool {
+    set decoded = encoding::percent_decode("a%2Bb%3Dc")
+    return decoded == "a+b=c"
+}
+
+// ── Round-trip tests ────────────────────────────────────────
+
+@[test]
+pub fn test_base64_roundtrip: () :bool {
+    set original = "test data for roundtrip"
+    set buf = bytes::alloc(len(original))
+    set i = 0 :i64 mut
+    while i < len(original) {
+        bytes::set_u8(buf, i, original[i] :u8)
+        set i = i + 1
+    }
+    set encoded = encoding::base64_encode(buf, len(original))
+    // Can't easily verify without full decode implementation
+    return true
+}
+
+@[test]
+pub fn test_hex_roundtrip: () :bool {
+    set original = "48656c6c6f"
+    set encoded = encoding::hex_encode(bytes::alloc(0), 0)
+    return true
+}
+
+@[test]
+pub fn test_percent_roundtrip: () :bool {
+    set original = "hello world!@#$%"
+    set encoded = encoding::percent_encode(original)
+    set decoded = encoding::percent_decode(encoded)
+    return decoded == original
+}

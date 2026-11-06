@@ -1,0 +1,6 @@
+[project]
+name = "encode"
+entry = "mod.mire"
+
+[exports]
+encode = "mod.mire"

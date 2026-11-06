@@ -1,0 +1,6 @@
+[project]
+name = "tls"
+entry = "mod.mire"
+
+[exports]
+tls = "mod.mire"

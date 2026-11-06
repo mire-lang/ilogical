@@ -1,0 +1,6 @@
+[project]
+name = "json"
+entry = "mod.mire"
+
+[exports]
+json = "mod.mire"

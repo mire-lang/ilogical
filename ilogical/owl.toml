@@ -1,0 +1,43 @@
+[project]
+name = "ilogical"
+version = "0.1.0"
+description = "Logical data processing for Mire: values, JSON, TOML, binary, schemas, encoding, HTTP and URLs"
+entry = "src/lib.mire"
+
+[build]
+compiler = "mire"
+profile = "debug"
+opt-level = 0
+artifact = "shared"
+runtime = "minimal"
+target = "x86_64-unknown-linux-gnu"
+panic = "abort"
+incremental = true
+debug-info = true
+
+[paths]
+sources = "src"
+cache = "bin/.cache"
+
+[security]
+mode = "strict"
+externs = ["rt_*", "pal_*"]
+extern_libs = ["c"]
+
+[dependencies]
+mire = { path = "/home/nyx/.owl/libs/mire" }
+kioto = { path = "/home/nyx/.owl/libs/kioto" }
+
+[exports]
+base = "src/base"
+format = "src/format"
+schema = "src/schema"
+encoding = "src/encoding"
+web = "src/web"
+url = "src/url"
+
+[bin]
+serve = "src/serve.mr"
+
+["owl@lock"]
+version = "3"

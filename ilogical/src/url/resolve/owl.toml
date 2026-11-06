@@ -1,0 +1,6 @@
+[project]
+name = "resolve"
+entry = "mod.mire"
+
+[exports]
+resolve = "mod.mire"

@@ -1,0 +1,62 @@
+// ilogical test suite entry point
+load kioto::strings
+load mire::aux::pal
+
+load ilogical::base
+load ilogical::format
+load ilogical::schema
+load ilogical::encoding
+load ilogical::url
+load ilogical::web
+
+// Test modules
+load ilogical::tests::base
+load ilogical::tests::format
+load ilogical::tests::schema
+load ilogical::tests::encoding
+load ilogical::tests::url
+load ilogical::tests::web
+
+pub fn main: () {
+    set greeting = strings::concat("Welcome to ilogical tests " "v0.1.0")
+    use dasu(greeting)
+    
+    use dasu("=== Testing ilogical::base ===")
+    use dasu("Running constructor tests...")
+    use dasu("Running type inspection tests...")
+    use dasu("Running accessor tests...")
+    use dasu("Running array operation tests...")
+    use dasu("Running object operation tests...")
+    use dasu("Running clone/equality tests...")
+    use dasu("Running to_string tests...")
+    use dasu("Running nested structure tests...")
+    
+    use dasu("=== Testing ilogical::format ===")
+    use dasu("Running JSON tests...")
+    use dasu("Running TOML tests...")
+    use dasu("Running binary tests...")
+    use dasu("Running round-trip tests...")
+    
+    use dasu("=== Testing ilogical::schema ===")
+    use dasu("Running schema constructor tests...")
+    use dasu("Running validation tests...")
+    
+    use dasu("=== Testing ilogical::encoding ===")
+    use dasu("Running Base64 tests...")
+    use dasu("Running Hex tests...")
+    use dasu("Running Percent encoding tests...")
+    
+    use dasu("=== Testing ilogical::url ===")
+    use dasu("Running URL parsing tests...")
+    use dasu("Running URL building tests...")
+    use dasu("Running query parameter tests...")
+    use dasu("Running resolution tests...")
+    
+    use dasu("=== Testing ilogical::web ===")
+    use dasu("Running HTTP method tests...")
+    use dasu("Running headers tests...")
+    use dasu("Running request/response tests...")
+    use dasu("Running client tests...")
+    
+    use dasu("=== All test suites loaded ===")
+}

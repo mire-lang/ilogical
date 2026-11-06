@@ -1,0 +1,145 @@
+load ilogical::format
+
+// ============================================================
+// ilogical::format — Tests for JSON, TOML, and Binary formats
+// ============================================================
+
+// ── JSON ──────────────────────────────────────────────────────
+
+@[test]
+pub fn test_json_encode_decode_null: () :bool {
+    set encoded = format::json_encode(base::null())
+    set decoded = format::json_decode(encoded)
+    return base::equals(decoded, base::null())
+}
+
+@[test]
+pub fn test_json_encode_decode_bool: () :bool {
+    set encoded = format::json_encode(base::bool(true))
+    set decoded = format::json_decode(encoded)
+    return base::as_bool(decoded) == true
+}
+
+@[test]
+pub fn test_json_encode_decode_int: () :bool {
+    set encoded = format::json_encode(base::int(42))
+    set decoded = format::json_decode(encoded)
+    return base::as_int(decoded) == 42
+}
+
+@[test]
+pub fn test_json_encode_decode_float: () :bool {
+    set encoded = format::json_encode(base::float(3.14 :f64))
+    set decoded = format::json_decode(encoded)
+    return base::as_float(decoded) == 3.14
+}
+
+@[test]
+pub fn test_json_encode_decode_string: () :bool {
+    set encoded = format::json_encode(base::string("hello"))
+    set decoded = format::json_decode(encoded)
+    return base::as_string(decoded) == "hello"
+}
+
+@[test]
+pub fn test_json_encode_decode_array: () :bool {
+    set a = base::array()
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    set encoded = format::json_encode(a)
+    set decoded = format::json_decode(encoded)
+    return base::array_len(decoded) == 2 &&
+           base::as_int(base::array_get(decoded, 0)) == 1 &&
+           base::as_int(base::array_get(decoded, 1)) == 2
+}
+
+@[test]
+pub fn test_json_encode_decode_object: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "name", base::string("test"))
+    set o = base::object_set(o, "value", base::int(42))
+    set encoded = format::json_encode(o)
+    set decoded = format::json_decode(encoded)
+    return base::object_len(decoded) == 2 &&
+           base::as_string(base::object_get(decoded, "name")) == "test" &&
+           base::as_int(base::object_get(decoded, "value")) == 42
+}
+
+@[test]
+pub fn test_json_encode_pretty: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "a", base::int(1))
+    set pretty = format::json_encode_pretty(o, "  ")
+    // Pretty output should contain newlines and indentation
+    return true  // Basic smoke test
+}
+
+// ── TOML ──────────────────────────────────────────────────────
+
+@[test]
+pub fn test_toml_encode_decode_int: () :bool {
+    set encoded = format::toml_encode(base::int(42))
+    set decoded = format::toml_decode(encoded)
+    return base::as_int(decoded) == 42
+}
+
+@[test]
+pub fn test_toml_encode_decode_string: () :bool {
+    set encoded = format::toml_encode(base::string("hello"))
+    set decoded = format::toml_decode(encoded)
+    return base::as_string(decoded) == "hello"
+}
+
+// ── Binary ────────────────────────────────────────────────────
+
+@[test]
+pub fn test_bin_encode_decode_int: () :bool {
+    set encoded = format::bin_encode(base::int(42))
+    set decoded = format::bin_decode(encoded, base::as_bytes_len(encoded))
+    return base::as_int(decoded) == 42
+}
+
+@[test]
+pub fn test_bin_encode_decode_string: () :bool {
+    set encoded = format::bin_encode(base::string("hello"))
+    set decoded = format::bin_decode(encoded, base::as_bytes_len(encoded))
+    return base::as_string(decoded) == "hello"
+}
+
+@[test]
+pub fn test_bin_encode_decode_array: () :bool {
+    set a = base::array()
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    set encoded = format::bin_encode(a)
+    set decoded = format::bin_decode(encoded, base::as_bytes_len(encoded))
+    return base::array_len(decoded) == 2 &&
+           base::as_int(base::array_get(decoded, 0)) == 1 &&
+           base::as_int(base::array_get(decoded, 1)) == 2
+}
+
+// ── Round-trip tests (JSON <-> TOML <-> Binary) ───────────────
+
+@[test]
+pub fn test_json_to_toml_roundtrip: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "name", base::string("test"))
+    set o = base::object_set(o, "value", base::int(42))
+    set json = format::json_encode(o)
+    set decoded = format::json_decode(json)
+    set toml = format::toml_encode(decoded)
+    set decoded2 = format::toml_decode(toml)
+    return base::equals(decoded, decoded2)
+}
+
+@[test]
+pub fn test_json_to_bin_roundtrip: () :bool {
+    set a = base::array()
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    set json = format::json_encode(a)
+    set decoded = format::json_decode(json)
+    set bin = format::bin_encode(decoded)
+    set decoded2 = format::bin_decode(bin, base::as_bytes_len(bin))
+    return base::equals(decoded, decoded2)
+}

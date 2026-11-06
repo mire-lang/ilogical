@@ -1,0 +1,6 @@
+[project]
+name = "transport"
+entry = "mod.mire"
+
+[exports]
+transport = "mod.mire"

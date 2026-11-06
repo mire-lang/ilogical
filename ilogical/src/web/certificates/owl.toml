@@ -1,0 +1,6 @@
+[project]
+name = "certificates"
+entry = "mod.mire"
+
+[exports]
+certificates = "mod.mire"

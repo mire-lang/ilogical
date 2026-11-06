@@ -1,0 +1,6 @@
+[project]
+name = "methods"
+entry = "mod.mire"
+
+[exports]
+methods = "mod.mire"

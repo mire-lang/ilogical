@@ -1,0 +1,146 @@
+load ilogical::url
+load ilogical::base
+
+// ============================================================
+// ilogical::url — Tests for URL parsing, building, and resolution
+// ============================================================
+
+// ── Parsing ─────────────────────────────────────────────────
+
+@[test]
+pub fn test_parse_simple_url: () :bool {
+    set url = url::parse("http://example.com/path")
+    return base::is_object(url)
+}
+
+@[test]
+pub fn test_parse_url_with_port: () :bool {
+    set url = url::parse("https://example.com:8080/path")
+    return base::is_object(url)
+}
+
+@[test]
+pub fn test_parse_url_with_query: () :bool {
+    set url = url::parse("http://example.com/path?a=1&b=2")
+    return base::is_object(url)
+}
+
+@[test]
+pub fn test_parse_url_with_fragment: () :bool {
+    set url = url::parse("http://example.com/path#section")
+    return base::is_object(url)
+}
+
+// ── Building ────────────────────────────────────────────────
+
+@[test]
+pub fn test_build_empty: () :bool {
+    set u = url::build()
+    return base::is_object(u)
+}
+
+@[test]
+pub fn test_set_scheme: () :bool {
+    set u = url::build()
+    set u = url::set_scheme(u, "https")
+    return base::as_string(url::scheme(u)) == "https"
+}
+
+@[test]
+pub fn test_set_host: () :bool {
+    set u = url::build()
+    set u = url::set_host(u, "example.com")
+    return base::as_string(url::host(u)) == "example.com"
+}
+
+@[test]
+pub fn test_set_port: () :bool {
+    set u = url::build()
+    set u = url::set_port(u, 8080)
+    return url::port(u) == 8080
+}
+
+@[test]
+pub fn test_set_path: () :bool {
+    set u = url::build()
+    set u = url::set_path(u, "/api/v1/users")
+    return base::as_string(url::path(u)) == "/api/v1/users"
+}
+
+@[test]
+pub fn test_set_fragment: () :bool {
+    set u = url::build()
+    set u = url::set_fragment(u, "section1")
+    return base::as_string(url::fragment(u)) == "section1"
+}
+
+// ── Query parameters ────────────────────────────────────────
+
+@[test]
+pub fn test_query_parse: () :bool {
+    set params = url::query_parse("a=1&b=2&c=hello")
+    return base::is_object(params)
+}
+
+@[test]
+pub fn test_query_get: () :bool {
+    set params = url::query_parse("a=1&b=hello")
+    return url::query_get(params, "a") == "1" &&
+           url::query_get(params, "b") == "hello"
+}
+
+@[test]
+pub fn test_query_stringify: () :bool {
+    set params = url::query_parse("a=1&b=2")
+    set str = url::query_stringify(params)
+    return str == "a=1&b=2" || str == "b=2&a=1"
+}
+
+@[test]
+pub fn test_query_set: () :bool {
+    set params = url::query_parse("a=1")
+    set params = url::query_set(params, "b", "2")
+    return url::query_get(params, "b") == "2"
+}
+
+// ── Resolution ────────────────────────────────────────────
+
+@[test]
+pub fn test_resolve_relative: () :bool {
+    set base = url::parse("http://example.com/base/")
+    set relative = url::parse("path/to/resource")
+    set resolved = url::resolve(base, relative)
+    return base::is_object(resolved)
+}
+
+@[test]
+pub fn test_resolve_str: () :bool {
+    set resolved = url::resolve_str("http://example.com/base/", "path/to/resource")
+    return resolved == "http://example.com/base/path/to/resource"
+}
+
+// ── Serialization ─────────────────────────────────────────
+
+@[test]
+pub fn test_to_string: () :bool {
+    set u = url::build()
+    set u = url::set_scheme(u, "https")
+    set u = url::set_host(u, "example.com")
+    set u = url::set_port(u, 443)
+    set u = url::set_path(u, "/api")
+    set str = url::to_string(u)
+    return str == "https://example.com:443/api"
+}
+
+@[test]
+pub fn test_getters: () :bool {
+    set u = url::build()
+    set u = url::set_scheme(u, "http")
+    set u = url::set_host(u, "localhost")
+    set u = url::set_port(u, 3000)
+    set u = url::set_path(u, "/test")
+    return url::scheme(u) == "http" &&
+           url::host(u) == "localhost" &&
+           url::port(u) == 3000 &&
+           url::path(u) == "/test"
+}

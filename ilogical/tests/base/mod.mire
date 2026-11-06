@@ -1,0 +1,421 @@
+load ilogical::base
+load mire::bytes
+
+// ============================================================
+// ilogical::base — Tests for Value type and core operations
+// ============================================================
+
+// ── Constructors ──────────────────────────────────────────────
+
+@[test]
+pub fn test_null_constructor: () :bool {
+    set n = base::null()
+    return base::is_null(n)
+}
+
+@[test]
+pub fn test_bool_constructor: () :bool {
+    set t = base::bool(true)
+    set f = base::bool(false)
+    return base::as_bool(t) == true && base::as_bool(f) == false
+}
+
+@[test]
+pub fn test_int_constructor: () :bool {
+    set i = base::int(42)
+    set neg = base::int(-100)
+    return base::as_int(i) == 42 && base::as_int(neg) == -100
+}
+
+@[test]
+pub fn test_float_constructor: () :bool {
+    set f = base::float(3.14 :f64)
+    set neg = base::float(-2.5 :f64)
+    return base::as_float(f) == 3.14 && base::as_float(neg) == -2.5
+}
+
+@[test]
+pub fn test_string_constructor: () :bool {
+    set s = base::string("hello world")
+    return base::as_string(s) == "hello world"
+}
+
+@[test]
+pub fn test_error_constructor: () :bool {
+    set e = base::error("test error")
+    return base::is_error(e) && base::as_string(e) == "test error"
+}
+
+@[test]
+pub fn test_array_constructor: () :bool {
+    set a = base::array()
+    return base::is_array(a) && base::array_len(a) == 0
+}
+
+@[test]
+pub fn test_object_constructor: () :bool {
+    set o = base::object()
+    return base::is_object(o) && base::object_len(o) == 0
+}
+
+@[test]
+pub fn test_blob_constructor: () :bool {
+    set buf = bytes::alloc(4)
+    bytes::set_u8(buf, 0, 1)
+    bytes::set_u8(buf, 1, 2)
+    bytes::set_u8(buf, 2, 3)
+    bytes::set_u8(buf, 3, 4)
+    set b = base::blob(&buf, 4)
+    return base::is_bytes(b) && base::as_bytes_len(b) == 4
+}
+
+// ── Type inspection ───────────────────────────────────────────
+
+@[test]
+pub fn test_kind_returns_correct_values: () :bool {
+    return base::kind(base::null()) == base::K_NULL &&
+           base::kind(base::bool(true)) == base::K_BOOL &&
+           base::kind(base::int(42)) == base::K_INT &&
+           base::kind(base::float(1.0 :f64)) == base::K_FLOAT &&
+           base::kind(base::string("")) == base::K_STRING &&
+           base::kind(base::array()) == base::K_ARRAY &&
+           base::kind(base::object()) == base::K_OBJECT &&
+           base::kind(base::blob(&bytes::alloc(1), 1)) == base::K_BYTES &&
+           base::kind(base::error("")) == base::K_ERROR
+}
+
+@[test]
+pub fn test_is_*_functions: () :bool {
+    set n = base::null()
+    set b = base::bool(true)
+    set i = base::int(1)
+    set f = base::float(1.0 :f64)
+    set s = base::string("")
+    set a = base::array()
+    set o = base::object()
+    set bb = base::blob(&bytes::alloc(1), 1)
+    set e = base::error("")
+    
+    return base::is_null(n) && base::is_bool(b) && base::is_int(i) &&
+           base::is_float(f) && base::is_string(s) && base::is_array(a) &&
+           base::is_object(o) && base::is_bytes(bb) && base::is_error(e)
+}
+
+@[test]
+pub fn test_type_name: () :bool {
+    return base::type_name(base::null()) == "null" &&
+           base::type_name(base::bool(true)) == "bool" &&
+           base::type_name(base::int(42)) == "int" &&
+           base::type_name(base::float(1.0 :f64)) == "float" &&
+           base::type_name(base::string("")) == "string" &&
+           base::type_name(base::array()) == "array" &&
+           base::type_name(base::object()) == "object" &&
+           base::type_name(base::blob(&bytes::alloc(1), 1)) == "bytes" &&
+           base::type_name(base::error("")) == "error"
+}
+
+// ── Accessors ─────────────────────────────────────────────────
+
+@[test]
+pub fn test_as_bool: () :bool {
+    return base::as_bool(base::bool(true)) == true &&
+           base::as_bool(base::bool(false)) == false &&
+           base::as_bool(base::int(1)) == false  // wrong type returns false
+}
+
+@[test]
+pub fn test_as_int: () :bool {
+    return base::as_int(base::int(42)) == 42 &&
+           base::as_int(base::int(-100)) == -100 &&
+           base::as_int(base::bool(true)) == 0  // wrong type returns 0
+}
+
+@[test]
+pub fn test_as_float: () :bool {
+    return base::as_float(base::float(3.14 :f64)) == 3.14 &&
+           base::as_float(base::float(-2.5 :f64)) == -2.5 &&
+           base::as_float(base::int(42)) == 0.0  // wrong type returns 0.0
+}
+
+@[test]
+pub fn test_as_string: () :bool {
+    return base::as_string(base::string("hello")) == "hello" &&
+           base::as_string(base::int(42)) == ""  // wrong type returns ""
+}
+
+@[test]
+pub fn test_as_bytes: () :bool {
+    set buf = bytes::alloc(3)
+    bytes::set_u8(buf, 0, 10)
+    bytes::set_u8(buf, 1, 20)
+    bytes::set_u8(buf, 2, 30)
+    set b = base::blob(&buf, 3)
+    set ptr = base::as_bytes_ptr(b)
+    set len = base::as_bytes_len(b)
+    return len == 3 &&
+           bytes::get_u8(ptr, 0) == 10 &&
+           bytes::get_u8(ptr, 1) == 20 &&
+           bytes::get_u8(ptr, 2) == 30
+}
+
+// ── Array operations ──────────────────────────────────────────
+
+@[test]
+pub fn test_array_push_and_get: () :bool {
+    set a = base::array()
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    set a = base::array_push(a, base::int(3))
+    return base::array_len(a) == 3 &&
+           base::as_int(base::array_get(a, 0)) == 1 &&
+           base::as_int(base::array_get(a, 1)) == 2 &&
+           base::as_int(base::array_get(a, 2)) == 3
+}
+
+@[test]
+pub fn test_array_len: () :bool {
+    set a = base::array()
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    return base::array_len(a) == 2
+}
+
+@[test]
+pub fn test_array_get_bounds: () :bool {
+    set a = base::array()
+    set a = base::array_push(a, base::int(42))
+    // Valid index
+    set v1 = base::array_get(a, 0)
+    // Invalid indices return null
+    set v2 = base::array_get(a, -1)
+    set v3 = base::array_get(a, 1)
+    set v4 = base::array_get(a, 100)
+    return base::as_int(v1) == 42 &&
+           base::is_null(v2) && base::is_null(v3) && base::is_null(v4)
+}
+
+@[test]
+pub fn test_array_push_different_types: () :bool {
+    set a = base::array()
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::string("hello"))
+    set a = base::array_push(a, base::float(3.14 :f64))
+    set a = base::array_push(a, base::bool(true))
+    return base::array_len(a) == 4 &&
+           base::as_int(base::array_get(a, 0)) == 1 &&
+           base::as_string(base::array_get(a, 1)) == "hello" &&
+           base::as_float(base::array_get(a, 2)) == 3.14 &&
+           base::as_bool(base::array_get(a, 3)) == true
+}
+
+// ── Object operations ─────────────────────────────────────────
+
+@[test]
+pub fn test_object_set_and_get: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "name", base::string("test"))
+    set o = base::object_set(o, "value", base::int(42))
+    return base::object_len(o) == 2 &&
+           base::as_string(base::object_get(o, "name")) == "test" &&
+           base::as_int(base::object_get(o, "value")) == 42
+}
+
+@[test]
+pub fn test_object_has: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "key", base::int(1))
+    return base::object_has(o, "key") == true &&
+           base::object_has(o, "missing") == false
+}
+
+@[test]
+pub fn test_object_key_at: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "a", base::int(1))
+    set o = base::object_set(o, "b", base::int(2))
+    return base::object_key_at(o, 0) == "a" &&
+           base::object_key_at(o, 1) == "b" &&
+           base::object_key_at(o, -1) == "" &&
+           base::object_key_at(o, 5) == ""
+}
+
+@[test]
+pub fn test_object_value_at: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "x", base::int(10))
+    set o = base::object_set(o, "y", base::int(20))
+    return base::as_int(base::object_value_at(o, 0)) == 10 &&
+           base::as_int(base::object_value_at(o, 1)) == 20
+}
+
+@[test]
+pub fn test_object_overwrite: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "key", base::int(1))
+    set o = base::object_set(o, "key", base::int(2))
+    return base::object_len(o) == 1 &&
+           base::as_int(base::object_get(o, "key")) == 2
+}
+
+// ── Clone and Equality ────────────────────────────────────────
+
+@[test]
+pub fn test_clone_primitives: () :bool {
+    return base::equals(base::clone(base::null()), base::null()) &&
+           base::equals(base::clone(base::bool(true)), base::bool(true)) &&
+           base::equals(base::clone(base::int(42)), base::int(42)) &&
+           base::equals(base::clone(base::float(3.14 :f64)), base::float(3.14 :f64)) &&
+           base::equals(base::clone(base::string("test")), base::string("test"))
+}
+
+@[test]
+pub fn test_clone_array: () :bool {
+    set a = base::array()
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    set cloned = base::clone(a)
+    return base::equals(a, cloned) &&
+           base::array_len(cloned) == 2 &&
+           base::as_int(base::array_get(cloned, 0)) == 1 &&
+           base::as_int(base::array_get(cloned, 1)) == 2
+}
+
+@[test]
+pub fn test_clone_object: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "a", base::int(1))
+    set o = base::object_set(o, "b", base::string("hello"))
+    set cloned = base::clone(o)
+    return base::equals(o, cloned) &&
+           base::object_len(cloned) == 2 &&
+           base::as_int(base::object_get(cloned, "a")) == 1 &&
+           base::as_string(base::object_get(cloned, "b")) == "hello"
+}
+
+@[test]
+pub fn test_clone_blob: () :bool {
+    set buf = bytes::alloc(3)
+    bytes::set_u8(buf, 0, 1)
+    bytes::set_u8(buf, 1, 2)
+    bytes::set_u8(buf, 2, 3)
+    set b = base::blob(&buf, 3)
+    set cloned = base::clone(b)
+    return base::equals(b, cloned) &&
+           base::as_bytes_len(cloned) == 3
+}
+
+@[test]
+pub fn test_equality_same_values: () :bool {
+    return base::equals(base::null(), base::null()) &&
+           base::equals(base::bool(true), base::bool(true)) &&
+           base::equals(base::int(42), base::int(42)) &&
+           base::equals(base::float(3.14 :f64), base::float(3.14 :f64)) &&
+           base::equals(base::string("hello"), base::string("hello"))
+}
+
+@[test]
+pub fn test_equality_different_values: () :bool {
+    return !base::equals(base::int(1), base::int(2)) &&
+           !base::equals(base::bool(true), base::bool(false)) &&
+           !base::equals(base::string("a"), base::string("b")) &&
+           !base::equals(base::array(), base::object())
+}
+
+@[test]
+pub fn test_equality_arrays: () :bool {
+    set a1 = base::array()
+    set a1 = base::array_push(a1, base::int(1))
+    set a1 = base::array_push(a1, base::int(2))
+    set a2 = base::array()
+    set a2 = base::array_push(a2, base::int(1))
+    set a2 = base::array_push(a2, base::int(2))
+    set a3 = base::array()
+    set a3 = base::array_push(a3, base::int(1))
+    return base::equals(a1, a2) && !base::equals(a1, a3)
+}
+
+@[test]
+pub fn test_equality_objects: () :bool {
+    set o1 = base::object()
+    set o1 = base::object_set(o1, "a", base::int(1))
+    set o1 = base::object_set(o1, "b", base::int(2))
+    set o2 = base::object()
+    set o2 = base::object_set(o2, "a", base::int(1))
+    set o2 = base::object_set(o2, "b", base::int(2))
+    set o3 = base::object()
+    set o3 = base::object_set(o3, "a", base::int(1))
+    return base::equals(o1, o2) && !base::equals(o1, o3)
+}
+
+// ── to_string ─────────────────────────────────────────────────
+
+@[test]
+pub fn test_to_string: () :bool {
+    return base::to_string(base::null()) == "null" &&
+           base::to_string(base::bool(true)) == "true" &&
+           base::to_string(base::bool(false)) == "false" &&
+           base::to_string(base::int(42)) == "42" &&
+           base::to_string(base::int(-10)) == "-10" &&
+           base::to_string(base::string("hello")) == "hello"
+}
+
+@[test]
+pub fn test_to_string_array: () :bool {
+    set a = base::array()
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    return base::to_string(a) == "[1, 2]"
+}
+
+@[test]
+pub fn test_to_string_object: () :bool {
+    set o = base::object()
+    set o = base::object_set(o, "a", base::int(1))
+    set o = base::object_set(o, "b", base::string("test"))
+    set s = base::to_string(o)
+    // Order might vary, check both possibilities
+    return s == "{a: 1, b: test}" || s == "{b: test, a: 1}"
+}
+
+@[test]
+pub fn test_to_string_blob: () :bool {
+    set buf = bytes::alloc(4)
+    set b = base::blob(&buf, 4)
+    return base::to_string(b) == "<4 bytes>"
+}
+
+// ── Nested structures ─────────────────────────────────────────
+
+@[test]
+pub fn test_nested_array: () :bool {
+    set inner = base::array()
+    set inner = base::array_push(inner, base::int(1))
+    set inner = base::array_push(inner, base::int(2))
+    set outer = base::array()
+    set outer = base::array_push(outer, inner)
+    set outer = base::array_push(outer, base::int(3))
+    return base::array_len(outer) == 2 &&
+           base::array_len(base::array_get(outer, 0)) == 2
+}
+
+@[test]
+pub fn test_object_with_array: () :bool {
+    set arr = base::array()
+    set arr = base::array_push(arr, base::int(1))
+    set arr = base::array_push(arr, base::int(2))
+    set o = base::object()
+    set o = base::object_set(o, "items", arr)
+    set retrieved = base::object_get(o, "items")
+    return base::is_array(retrieved) && base::array_len(retrieved) == 2
+}
+
+@[test]
+pub fn test_object_with_object: () :bool {
+    set inner = base::object()
+    set inner = base::object_set(inner, "nested", base::int(42))
+    set outer = base::object()
+    set outer = base::object_set(outer, "inner", inner)
+    set retrieved = base::object_get(outer, "inner")
+    return base::is_object(retrieved) &&
+           base::as_int(base::object_get(retrieved, "nested")) == 42
+}

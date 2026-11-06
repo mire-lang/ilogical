@@ -1,0 +1,6 @@
+[project]
+name = "connection"
+entry = "mod.mire"
+
+[exports]
+connection = "mod.mire"

@@ -1,0 +1,6 @@
+[project]
+name = "verification"
+entry = "mod.mire"
+
+[exports]
+verification = "mod.mire"

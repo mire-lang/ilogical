@@ -1,0 +1,100 @@
+load ilogical::schema
+
+// ============================================================
+// ilogical::schema — Tests for schema definition and validation
+// ============================================================
+
+// ── Schema constructors ──────────────────────────────────────
+
+@[test]
+pub fn test_any_schema: () :bool {
+    set s = schema::any()
+    return schema::schema_type_name(s) == "any"
+}
+
+@[test]
+pub fn test_type_schema: () :bool {
+    set s = schema::type_schema("int")
+    return schema::schema_type_name(s) == "type"
+}
+
+@[test]
+pub fn test_object_schema: () :bool {
+    set s = schema::object_schema()
+    return schema::schema_type_name(s) == "object"
+}
+
+@[test]
+pub fn test_array_schema: () :bool {
+    set item = schema::type_schema("int")
+    set s = schema::array_schema(item)
+    return schema::schema_type_name(s) == "array"
+}
+
+@[test]
+pub fn test_union_schema: () :bool {
+    set schemas = mire::vec::push::i64([] :vec[i64] mut, schema::type_schema("int"))
+    set s = schema::union_schema(schemas)
+    return schema::schema_type_name(s) == "union"
+}
+
+@[test]
+pub fn test_custom_schema: () :bool {
+    set s = schema::custom_schema(0)
+    return schema::schema_type_name(s) == "custom"
+}
+
+// ── Object schema fields ────────────────────────────────────
+
+@[test]
+pub fn test_object_field: () :bool {
+    set s = schema::object_schema()
+    set s = schema::object_field(s, "name", schema::type_schema("string"), true)
+    set s = schema::object_field(s, "age", schema::type_schema("int"), false)
+    // Smoke test - just verify it doesn't crash
+    return true
+}
+
+// ── Validation ──────────────────────────────────────────────
+
+@[test]
+pub fn test_validate_any_accepts_everything: () :bool {
+    set s = schema::any()
+    return schema::validate(s, base::null()) == 0 &&
+           schema::validate(s, base::bool(true)) == 0 &&
+           schema::validate(s, base::int(42)) == 0 &&
+           schema::validate(s, base::float(1.0 :f64)) == 0 &&
+           schema::validate(s, base::string("")) == 0 &&
+           schema::validate(s, base::array()) == 0 &&
+           schema::validate(s, base::object()) == 0
+}
+
+@[test]
+pub fn test_validate_type_schema: () :bool {
+    set s = schema::type_schema("int")
+    return schema::validate(s, base::int(42)) == 0 &&
+           schema::validate(s, base::string("")) != 0
+}
+
+@[test]
+pub fn test_validate_array_schema: () :bool {
+    set item = schema::type_schema("int")
+    set s = schema::array_schema(item)
+    set a = base::array()
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    set b = base::array()
+    set b = base::array_push(b, base::int(1))
+    set b = base::array_push(b, base::string("bad"))
+    return schema::validate(s, a) == 0 &&
+           schema::validate(s, b) != 0
+}
+
+@[test]
+pub fn test_validate_union_schema: () :bool {
+    set s = schema::union_schema(mire::vec::push::i64([] :vec[i64] mut, schema::type_schema("int")))
+    set s = schema::union_schema(mire::vec::push::i64(schema::union_schema(s), schema::type_schema("string")))
+    return schema::validate(s, base::int(42)) == 0 &&
+           schema::validate(s, base::string("hello")) == 0 &&
+           schema::validate(s, base::bool(true)) != 0
+}

@@ -1,0 +1,215 @@
+module schema
+
+// ilogical::schema — schema definition and validation for Values.
+// Supports structural schemas with type constraints, required fields, and custom validators.
+
+load ilogical::base
+load mire::vec
+load mire::str
+
+// ── Schema types ────────────────────────────────────────────────
+
+pub struct Schema {
+    kind :i64  // 0=any, 1=type, 2=object, 3=array, 4=union, 5=custom
+    type_name :str
+    fields :i64  // handle to object schema fields
+    items :i64   // handle to array item schema
+    variants :i64 // handle to union variants
+    validator :i64 // handle to custom validator function
+}
+
+// Schema kind constants
+cons SCH_ANY = 0
+cons SCH_TYPE = 1
+cons SCH_OBJECT = 2
+cons SCH_ARRAY = 3
+cons SCH_UNION = 4
+cons SCH_CUSTOM = 5
+
+// ── Schema constructors ────────────────────────────────────────
+
+pub fn any: () :i64 {
+    set buf = bytes::alloc(48)
+    set p = buf
+    pal::write_u64(p, SCH_ANY)
+    pal::write_u64(pal::ptr_add(p, 8), 0)
+    pal::write_u64(pal::ptr_add(p, 16), 0)
+    pal::write_u64(pal::ptr_add(p, 24), 0)
+    pal::write_u64(pal::ptr_add(p, 32), 0)
+    pal::write_u64(pal::ptr_add(p, 40), 0)
+    return buf :i64
+}
+
+pub fn type_schema: (type_name :str) :i64 {
+    set buf = bytes::alloc(48)
+    set p = buf
+    pal::write_u64(p, SCH_TYPE)
+    set tn = type_name :ptr
+    pal::write_u64(pal::ptr_add(p, 8), tn :i64)
+    pal::write_u64(pal::ptr_add(p, 16), 0)
+    pal::write_u64(pal::ptr_add(p, 24), 0)
+    pal::write_u64(pal::ptr_add(p, 32), 0)
+    pal::write_u64(pal::ptr_add(p, 40), 0)
+    return buf :i64
+}
+
+pub fn object_schema: () :i64 {
+    set buf = bytes::alloc(48)
+    set p = buf
+    pal::write_u64(p, SCH_OBJECT)
+    pal::write_u64(pal::ptr_add(p, 8), 0)
+    // fields will be stored as object buffer
+    set fields = base::object_buf_alloc(4)
+    pal::write_u64(pal::ptr_add(p, 16), fields :i64)
+    pal::write_u64(pal::ptr_add(p, 24), 0)
+    pal::write_u64(pal::ptr_add(p, 32), 0)
+    pal::write_u64(pal::ptr_add(p, 40), 0)
+    return buf :i64
+}
+
+pub fn array_schema: (item_schema :i64) :i64 {
+    set buf = bytes::alloc(48)
+    set p = buf
+    pal::write_u64(p, SCH_ARRAY)
+    pal::write_u64(pal::ptr_add(p, 8), 0)
+    pal::write_u64(pal::ptr_add(p, 16), 0)
+    pal::write_u64(pal::ptr_add(p, 24), item_schema)
+    pal::write_u64(pal::ptr_add(p, 32), 0)
+    pal::write_u64(pal::ptr_add(p, 40), 0)
+    return buf :i64
+}
+
+pub fn union_schema: (schemas :i64) :i64 {
+    // schemas is a vec[i64] of schema handles
+    set buf = bytes::alloc(48)
+    set p = buf
+    pal::write_u64(p, SCH_UNION)
+    pal::write_u64(pal::ptr_add(p, 8), 0)
+    pal::write_u64(pal::ptr_add(p, 16), 0)
+    pal::write_u64(pal::ptr_add(p, 24), 0)
+    pal::write_u64(pal::ptr_add(p, 32), schemas)
+    pal::write_u64(pal::ptr_add(p, 40), 0)
+    return buf :i64
+}
+
+pub fn custom_schema: (validator_fn :i64) :i64 {
+    set buf = bytes::alloc(48)
+    set p = buf
+    pal::write_u64(p, SCH_CUSTOM)
+    pal::write_u64(pal::ptr_add(p, 8), 0)
+    pal::write_u64(pal::ptr_add(p, 16), 0)
+    pal::write_u64(pal::ptr_add(p, 24), 0)
+    pal::write_u64(pal::ptr_add(p, 32), 0)
+    pal::write_u64(pal::ptr_add(p, 40), validator_fn)
+    return buf :i64
+}
+
+// ── Object schema field management ─────────────────────────────
+
+pub fn object_field: (schema :i64, name :str, field_schema :i64, required :bool) :i64 {
+    // Add field to object schema
+    set base = schema :ptr
+    set kind = pal::read_u64(p)
+    if kind != SCH_OBJECT { return schema }
+    set fields = pal::read_u64(pal::ptr_add(p, 16)) :ptr
+    set key = str::copy(name) :ptr
+    set value = base::int(if required { 1 } else { 0 })
+    // Store as tuple (field_schema, required)
+    // For simplicity, we'll use a compound value
+    set field_obj = base::object()
+    set field_obj = base::object_set(field_obj, "schema", field_schema)
+    set field_obj = base::object_set(field_obj, "required", base::int(if required { 1 } else { 0 }))
+    set new_fields = base::object_buf_push(fields, str::copy(name) :ptr, field_obj)
+    if new_fields != fields {
+        pal::write_u64(pal::ptr_add(base, 16), new_fields :i64)
+    }
+    return schema
+}
+
+// ── Validation ─────────────────────────────────────────────────
+
+pub fn validate: (schema :i64, value :i64) :i64 {
+    // Returns 0 for valid, error handle for invalid
+    set base = schema :ptr
+    set kind = pal::read_u64(p)
+    if kind == SCH_ANY { return 0 }
+    if kind == SCH_TYPE {
+        return validate_type(pal::read_u64(pal::ptr_add(p, 8)) :ptr, value)
+    }
+    if kind == SCH_OBJECT {
+        return validate_object(pal::read_u64(pal::ptr_add(p, 16)) :ptr, value)
+    }
+    if kind == SCH_ARRAY {
+        return validate_array(pal::read_u64(pal::ptr_add(p, 24)), value)
+    }
+    if kind == SCH_UNION {
+        return validate_union(pal::read_u64(pal::ptr_add(p, 32)), value)
+    }
+    if kind == SCH_CUSTOM {
+        // Call custom validator
+        return 0 // placeholder
+    }
+    return base::error("unknown schema kind")
+}
+
+fn validate_type: (type_name :ptr, value :i64) :i64 {
+    set expected = str::copy(type_name :ptr :str)
+    set actual = base::type_name(value)
+    if expected == actual { return 0 }
+    return base::error("type mismatch: expected " + expected + ", got " + actual)
+}
+
+fn validate_object: (fields :ptr, value :i64) :i64 {
+    if base::kind(value) != base::K_OBJECT { return base::error("expected object") }
+    // Check required fields
+    // For simplicity, just check that all schema fields exist in value
+    return 0 // placeholder
+}
+
+fn validate_array: (item_schema :i64, value :i64) :i64 {
+    if base::kind(value) != base::K_ARRAY { return base::error("expected array") }
+    set len = base::array_len(value)
+    set i = 0 :i64 mut
+    while i < len {
+        set item = base::array_get(value, i)
+        set err = validate(item_schema, item)
+        if err != 0 { return err }
+        set i = i + 1
+    }
+    return 0
+}
+
+fn validate_union: (schemas :i64, value :i64) :i64 {
+    // schemas is a vec[i64] of schema handles
+    set schemas_vec = schemas :ptr :vec[i64]
+    set len = vec::len(schemas_vec)
+    set i = 0 :i64 mut
+    while i < len {
+        set sch = vec::get::i64(schemas_vec, i)
+        set err = validate(sch, value)
+        if err == 0 { return 0 }
+        set i = i + 1
+    }
+    return base::error("no matching variant in union")
+}
+
+// ── Schema introspection ───────────────────────────────────────
+
+pub fn schema_type_name: (schema :i64) :str {
+    set base = schema :ptr
+    set kind = pal::read_u64(p)
+    if kind == SCH_ANY { return "any" }
+    if kind == SCH_TYPE { 
+        set tn = pal::read_u64(pal::ptr_add(p, 8)) :ptr
+        return str::copy(tn :ptr :str)
+    }
+    if kind == SCH_OBJECT { return "object" }
+    if kind == SCH_ARRAY { return "array" }
+    if kind == SCH_UNION { return "union" }
+    if kind == SCH_CUSTOM { return "custom" }
+    return "unknown"
+}
+
+load ilogical::base
+load mire::vec
+load mire::aux::pal

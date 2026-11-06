@@ -1,0 +1,173 @@
+module url
+
+// ilogical::url — URL parsing, encoding, and resolution.
+
+load ilogical::base
+load ilogical::encoding
+load mire::str
+load mire::vec
+load mire::aux::pal
+
+// ── URL struct ──────────────────────────────────────────────────
+
+pub struct URL {
+    scheme :str
+    host :str
+    port :i64
+    path :str
+    query :i64  // handle to query params object
+    fragment :str
+}
+
+// ── Parsing ─────────────────────────────────────────────────────
+
+pub fn parse: (s :str) :i64 {
+    return rt_url_parse(s)
+}
+
+pub fn parse_with_base: (s :str, base :i64) :i64 {
+    return rt_url_parse_with_base(s, base)
+}
+
+// ── Building ────────────────────────────────────────────────────
+
+pub fn build: () :i64 {
+    set buf = bytes::alloc(64)
+    set p = buf
+    pal::write_u64(p, 0) // scheme ptr
+    pal::write_u64(pal::ptr_add(p, 8), 0) // host ptr
+    pal::write_u64(pal::ptr_add(p, 16), 0) // port
+    pal::write_u64(pal::ptr_add(p, 24), 0) // path ptr
+    pal::write_u64(pal::ptr_add(p, 32), 0) // query ptr
+    pal::write_u64(pal::ptr_add(p, 40), 0) // fragment ptr
+    return buf :i64
+}
+
+pub fn set_scheme: (url :i64, scheme :str) :i64 {
+    set p = url :ptr
+    pal::write_u64(pal::ptr_add(p, 0), scheme :ptr :i64)
+    return url
+}
+
+pub fn set_host: (url :i64, host :str) :i64 {
+    set p = url :ptr
+    pal::write_u64(pal::ptr_add(p, 8), host :ptr :i64)
+    return url
+}
+
+pub fn set_port: (url :i64, port :i64) :i64 {
+    set p = url :ptr
+    pal::write_u64(pal::ptr_add(p, 16), port)
+    return url
+}
+
+pub fn set_path: (url :i64, path :str) :i64 {
+    set p = url :ptr
+    pal::write_u64(pal::ptr_add(p, 24), path :ptr :i64)
+    return url
+}
+
+pub fn set_query: (url :i64, query :i64) :i64 {
+    set p = url :ptr
+    pal::write_u64(pal::ptr_add(p, 32), query)
+    return url
+}
+
+pub fn set_fragment: (url :i64, fragment :str) :i64 {
+    set p = url :ptr
+    pal::write_u64(pal::ptr_add(p, 40), fragment :ptr :i64)
+    return url
+}
+
+// ── Query parameters ────────────────────────────────────────────
+
+pub fn query_parse: (s :str) :i64 {
+    // Parse query string into base::Value object
+    return rt_query_parse(s)
+}
+
+pub fn query_stringify: (params :i64) :str {
+    return rt_query_stringify(params)
+}
+
+pub fn query_get: (params :i64, key :str) :str {
+    // params is a base::Value object
+    set val = base::object_get(params, key)
+    return base::as_string(val)
+}
+
+pub fn query_set: (params :i64, key :str, value :str) :i64 {
+    set val = base::string(value)
+    return base::object_set(params, key, val)
+}
+
+pub fn query_remove: (params :i64, key :str) :i64 {
+    // Would need object_remove function
+    return params // placeholder
+}
+
+// ── Resolution ──────────────────────────────────────────────────
+
+pub fn resolve: (base :i64, relative :i64) :i64 {
+    return rt_url_resolve(base, relative)
+}
+
+pub fn resolve_str: (base :str, relative :str) :str {
+    return rt_url_resolve_str(base, relative)
+}
+
+// ── Serialization ───────────────────────────────────────────────
+
+pub fn to_string: (url :i64) :str {
+    return rt_url_to_string(url)
+}
+
+pub fn host: (url :i64) :str {
+    set p = url :ptr
+    set h = pal::read_u64(pal::ptr_add(p, 8)) :ptr
+    return str::copy(h :ptr :str)
+}
+
+pub fn path: (url :i64) :str {
+    set p = url :ptr
+    set h = pal::read_u64(pal::ptr_add(p, 24)) :ptr
+    return str::copy(h :ptr :str)
+}
+
+pub fn scheme: (url :i64) :str {
+    set p = url :ptr
+    set h = pal::read_u64(p) :ptr
+    return str::copy(h :ptr :str)
+}
+
+pub fn port: (url :i64) :i64 {
+    set p = url :ptr
+    return pal::read_u64(pal::ptr_add(p, 16))
+}
+
+pub fn query: (url :i64) :i64 {
+    set p = url :ptr
+    return pal::read_u64(pal::ptr_add(p, 32))
+}
+
+pub fn fragment: (url :i64) :str {
+    set p = url :ptr
+    set h = pal::read_u64(pal::ptr_add(p, 40)) :ptr
+    return str::copy(h :ptr :str)
+}
+
+// ── Extern declarations ─────────────────────────────────────────
+
+extern fn rt_url_parse: (s :str) :i64 lib "pal"
+extern fn rt_url_parse_with_base: (s :str, base :i64) :i64 lib "pal"
+extern fn rt_url_resolve: (base :i64, relative :i64) :i64 lib "pal"
+extern fn rt_url_resolve_str: (base :str, relative :str) :str lib "pal"
+extern fn rt_url_to_string: (url :i64) :str lib "pal"
+extern fn rt_query_parse: (s :str) :i64 lib "pal"
+extern fn rt_query_stringify: (params :i64) :str lib "pal"
+
+load ilogical::base
+load ilogical::encoding
+load mire::str
+load mire::vec
+load mire::aux::pal

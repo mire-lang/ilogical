@@ -1,0 +1,169 @@
+@[no_main]
+module owl_serve
+// `owl serve` — WebSocket/HTTP server command for the owl toolchain.
+//
+// Usage: owl serve [OPTIONS] <IP:PORT>
+//   --ws          Enable WebSocket support
+//   --http        Enable HTTP support  
+//   --dir <DIR>   Static file directory
+//   --cert <FILE> TLS certificate file
+//   --key <FILE>  TLS key file
+
+load kioto::net
+load kioto::net::ws
+load kioto::fs
+load kioto::strings
+load mire::aux::pal
+
+// Server configuration
+struct ServeConfig {
+    host :str
+    port :u16
+    ws_enabled :bool
+    http_enabled :bool
+    static_dir :str
+    cert_file :str
+    key_file :str
+}
+
+// Parse IP:PORT string
+fn parse_addr: (s :str) :i64 {
+    // Returns handle to config object
+    set buf = bytes::alloc(64)
+    set p = buf
+    // Parse host:port
+    set colon = strings::index(s, ":")
+    if colon < 0 {
+        // No port, use default
+        pal::write_u64(p, s :ptr :i64)
+        pal::write_u64(pal::ptr_add(p, 8), 8080)
+    } else {
+        set host = strings::substr(s, 0, colon)
+        set port_str = strings::substr(s, colon + 1, len(s) - colon - 1)
+        set port = rt_string_to_i64(port_str)
+        pal::write_u64(p, host :ptr :i64)
+        pal::write_u64(pal::ptr_add(p, 8), port)
+    }
+    return buf :i64
+}
+
+// Main serve function
+pub fn serve: (config :ServeConfig) :i64 {
+    // Create TCP listener
+    set listener = net::listener::bind::tcp(config.port)
+    if listener.handle <= 0 {
+        use dasu("Failed to bind to port " + rt_i64_to_string(config.port :i64))
+        return -1
+    }
+    
+    use dasu("Server listening on " + config.host + ":" + rt_i64_to_string(config.port :i64))
+    
+    if config.ws_enabled {
+        use dasu("WebSocket support enabled")
+    }
+    
+    if config.http_enabled {
+        use dasu("HTTP support enabled")
+    }
+    
+    if config.static_dir != "" {
+        use dasu("Serving static files from " + config.static_dir)
+    }
+    
+    // Accept loop
+    while true {
+        set sock = net::listener::accept(&listener)
+        if sock.handle <= 0 {
+            continue
+        }
+        
+        // Handle connection in a new task/thread
+        // For now, handle synchronously
+        handle_connection(sock, config)
+    }
+    
+    return 0
+}
+
+// Handle a single connection
+fn handle_connection: (sock :net::Socket, config :ServeConfig) {
+    // Read first request to determine protocol
+    set buf = strings::repeat("\0" 8192)
+    set n = net::socket::recv(&sock, &mut buf, 8192)
+    if n <= 0 {
+        return
+    }
+    
+    // Check if WebSocket upgrade request
+    set is_ws = strings::contains(buf, "Upgrade: websocket")
+    
+    if is_ws && config.ws_enabled {
+        // Upgrade to WebSocket
+        // Would need to perform handshake and then handle WebSocket frames
+        use dasu("WebSocket connection from client")
+    } else if config.http_enabled {
+        // Handle HTTP request
+        // Parse HTTP request, serve static files or API
+        use dasu("HTTP request from client")
+    }
+    
+    net::socket::close(&sock)
+}
+
+// CLI entry point
+pub fn main: (args :vec[str]) :i64 {
+    // Parse arguments
+    set config = ServeConfig \
+        host: "0.0.0.0" \
+        port: 8080 \
+        ws_enabled: false \
+        http_enabled: true \
+        static_dir: "" \
+        cert_file: "" \
+        key_file: ""
+    
+    set i = 1 :i64 mut
+    while i < vec::len(args) {
+        set arg = vec::get::str(args, i)
+        if arg == "--ws" {
+            config.ws_enabled = true
+        } else if arg == "--http" {
+            config.http_enabled = true
+        } else if arg == "--dir" {
+            set i = i + 1
+            if i < vec::len(args) {
+                config.static_dir = vec::get::str(args, i)
+            }
+        } else if arg == "--cert" {
+            set i = i + 1
+            if i < vec::len(args) {
+                config.cert_file = vec::get::str(args, i)
+            }
+        } else if arg == "--key" {
+            set i = i + 1
+            if i < vec::len(args) {
+                config.key_file = vec::get::str(args, i)
+            }
+        } else if strings::starts_with(arg, "--") {
+            // Unknown flag
+        } else {
+            // Positional argument - IP:PORT
+            set parsed = parse_addr(arg)
+            config.host = "0.0.0.0" // placeholder
+            config.port = 8080 // placeholder
+        }
+        set i = i + 1
+    }
+    
+    return serve(config)
+}
+
+extern fn rt_i64_to_string: (value :i64) :str lib "pal"
+extern fn rt_string_to_i64: (s :&str) :i64 lib "pal"
+
+load kioto::net
+load kioto::net::ws
+load kioto::fs
+load kioto::strings
+load mire::bytes
+load mire::aux::pal

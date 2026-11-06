@@ -1,0 +1,38 @@
+module ilogical
+
+// ilogical — logical data processing for Mire.
+//
+// The package is split into independent namespaces so a program only pays for
+// what it loads:
+//
+//   ilogical::base        dynamic Value, the common representation
+//   ilogical::format      json / toml / bin codecs
+//   ilogical::schema      schema definition and validation
+//   ilogical::encoding    base64 / hex / percent
+//   ilogical::url         parse / encode / resolve
+//   ilogical::web         HTTP client and message types
+//
+// Every format decodes into the same base::Value, so JSON can be converted to
+// TOML or binary without an intermediate string.
+
+load ilogical::base
+load ilogical::format
+load ilogical::schema
+load ilogical::encoding
+load ilogical::url
+load ilogical::web
+
+pub fn version: () :str {
+    return "0.1.0"
+}
+
+pub fn status: () :str {
+    set report = "ilogical 0.1.0" :str mut
+    set report = report + "\n  base:     dynamic Value (null/bool/int/float/string/array/object/bytes)"
+    set report = report + "\n  format:   json, toml, bin"
+    set report = report + "\n  schema:   definition, validation, constraints"
+    set report = report + "\n  encoding: base64, hex, percent"
+    set report = report + "\n  url:      parse, encode, resolve"
+    set report = report + "\n  web:      client, request, response, headers, methods, cookies"
+    return report
+}

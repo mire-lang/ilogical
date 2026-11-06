@@ -1,0 +1,66 @@
+module encoding
+
+// ilogical::encoding — Base64, Hex, and Percent encoding/decoding.
+
+load mire::bytes
+load mire::aux::pal
+
+// ── Base64 ──────────────────────────────────────────────────────
+
+pub fn base64_encode: (data :&ptr, len :i64) :str {
+    return rt_base64_encode(data, len)
+}
+
+pub fn base64_decode: (s :str) :i64 {
+    // Returns handle to decoded buffer
+    return rt_base64_decode(s)
+}
+
+pub fn base64_decode_to_ptr: (s :str, out :&mut ptr, out_len :&mut i64) {
+    rt_base64_decode_to_ptr(s, out, out_len)
+}
+
+pub fn base64_url_encode: (data :&ptr, len :i64) :str {
+    return rt_base64_url_encode(data, len)
+}
+
+pub fn base64_url_decode: (s :str) :i64 {
+    return rt_base64_url_decode(s)
+}
+
+// ── Hex ─────────────────────────────────────────────────────────
+
+pub fn hex_encode: (data :&ptr, len :i64) :str {
+    return rt_hex_encode(data, len)
+}
+
+pub fn hex_decode: (s :str) :i64 {
+    return rt_hex_decode(s)
+}
+
+pub fn hex_decode_to_ptr: (s :str, out :&mut ptr, out_len :&mut i64) {
+    rt_hex_decode_to_ptr(s, out, out_len)
+}
+
+// ── Percent (URL) encoding ──────────────────────────────────────
+
+pub fn percent_encode: (s :str) :str {
+    return rt_percent_encode(s)
+}
+
+pub fn percent_decode: (s :str) :str {
+    return rt_percent_decode(s)
+}
+
+// ── Extern declarations ─────────────────────────────────────────
+
+extern fn rt_base64_encode: (data :&ptr, len :i64) :str lib "pal"
+extern fn rt_base64_decode: (s :str) :i64 lib "pal"
+extern fn rt_base64_decode_to_ptr: (s :str, out :&mut ptr, out_len :&mut i64) lib "pal"
+extern fn rt_base64_url_encode: (data :&ptr, len :i64) :str lib "pal"
+extern fn rt_base64_url_decode: (s :str) :i64 lib "pal"
+extern fn rt_hex_encode: (data :&ptr, len :i64) :str lib "pal"
+extern fn rt_hex_decode: (s :str) :i64 lib "pal"
+extern fn rt_hex_decode_to_ptr: (s :str, out :&mut ptr, out_len :&mut i64) lib "pal"
+extern fn rt_percent_encode: (s :str) :str lib "pal"
+extern fn rt_percent_decode: (s :str) :str lib "pal"

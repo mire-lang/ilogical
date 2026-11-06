@@ -1,0 +1,6 @@
+[project]
+name = "base"
+entry = "mod.mire"
+
+[exports]
+base = "mod.mire"

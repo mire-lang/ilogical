@@ -1,0 +1,269 @@
+module web
+
+// ilogical::web — HTTP client, request/response, headers, methods, cookies.
+
+load ilogical::base
+load ilogical::url
+load mire::vec
+load mire::str
+load mire::aux::pal
+
+// ── HTTP Methods ────────────────────────────────────────────────
+
+cons METHOD_GET = 0
+cons METHOD_POST = 1
+cons METHOD_PUT = 2
+cons METHOD_DELETE = 3
+cons METHOD_PATCH = 4
+cons METHOD_HEAD = 5
+cons METHOD_OPTIONS = 6
+
+pub fn method_name: (m :i64) :str {
+    if m == METHOD_GET { return "GET" }
+    if m == METHOD_POST { return "POST" }
+    if m == METHOD_PUT { return "PUT" }
+    if m == METHOD_DELETE { return "DELETE" }
+    if m == METHOD_PATCH { return "PATCH" }
+    if m == METHOD_HEAD { return "HEAD" }
+    if m == METHOD_OPTIONS { return "OPTIONS" }
+    return "UNKNOWN"
+}
+
+pub fn method_from_str: (s :str) :i64 {
+    if s == "GET" { return METHOD_GET }
+    if s == "POST" { return METHOD_POST }
+    if s == "PUT" { return METHOD_PUT }
+    if s == "DELETE" { return METHOD_DELETE }
+    if s == "PATCH" { return METHOD_PATCH }
+    if s == "HEAD" { return METHOD_HEAD }
+    if s == "OPTIONS" { return METHOD_OPTIONS }
+    return -1
+}
+
+// ── Headers ─────────────────────────────────────────────────────
+
+pub struct Headers {
+    // Internal representation as base::Value object
+    inner :i64
+}
+
+pub fn headers_new: () :i64 {
+    return base::object()
+}
+
+pub fn headers_set: (headers :i64, name :str, value :str) :i64 {
+    return base::object_set(headers, name, base::string(value))
+}
+
+pub fn headers_get: (headers :i64, name :str) :str {
+    set val = base::object_get(headers, name)
+    return base::as_string(val)
+}
+
+pub fn headers_has: (headers :i64, name :str) :bool {
+    return base::object_has(headers, name)
+}
+
+pub fn headers_remove: (headers :i64, name :str) :i64 {
+    // Would need object_remove
+    return headers // placeholder
+}
+
+pub fn headers_iter: (headers :i64) :i64 {
+    // Return iterator handle
+    return headers // placeholder
+}
+
+// ── Request ────────────────────────────────────────────────────
+
+pub struct Request {
+    method :i64
+    url :i64
+    headers :i64
+    body :i64
+}
+
+pub fn request_new: (method :i64, url :i64) :i64 {
+    set buf = bytes::alloc(32)
+    set p = buf
+    pal::write_u64(p, method)
+    pal::write_u64(pal::ptr_add(p, 8), url)
+    pal::write_u64(pal::ptr_add(p, 16), 0) // headers
+    pal::write_u64(pal::ptr_add(p, 24), 0) // body
+    return buf :i64
+}
+
+pub fn request_method: (req :i64) :i64 {
+    set p = req :ptr
+    return pal::read_u64(p)
+}
+
+pub fn request_url: (req :i64) :i64 {
+    set p = req :ptr
+    return pal::read_u64(pal::ptr_add(p, 8))
+}
+
+pub fn request_headers: (req :i64) :i64 {
+    set p = req :ptr
+    return pal::read_u64(pal::ptr_add(p, 16))
+}
+
+pub fn request_body: (req :i64) :i64 {
+    set p = req :ptr
+    return pal::read_u64(pal::ptr_add(p, 24))
+}
+
+pub fn request_set_headers: (req :i64, headers :i64) :i64 {
+    set p = req :ptr
+    pal::write_u64(pal::ptr_add(p, 16), headers)
+    return req
+}
+
+pub fn request_set_body: (req :i64, body :i64) :i64 {
+    set p = req :ptr
+    pal::write_u64(pal::ptr_add(p, 24), body)
+    return req
+}
+
+pub fn request_set_header: (req :i64, name :str, value :str) :i64 {
+    set h = request_headers(req)
+    if h == 0 {
+        set h = base::object()
+        set p = req :ptr
+        pal::write_u64(pal::ptr_add(p, 16), h)
+    }
+    return base::object_set(h, name, base::string(value))
+}
+
+// ── Response ────────────────────────────────────────────────────
+
+pub struct Response {
+    status :i64
+    headers :i64
+    body :i64
+}
+
+pub fn response_new: (status :i64) :i64 {
+    set buf = bytes::alloc(24)
+    set p = buf
+    pal::write_u64(p, status)
+    pal::write_u64(pal::ptr_add(p, 8), 0) // headers
+    pal::write_u64(pal::ptr_add(p, 16), 0) // body
+    return buf :i64
+}
+
+pub fn response_status: (resp :i64) :i64 {
+    set p = resp :ptr
+    return pal::read_u64(p)
+}
+
+pub fn response_headers: (resp :i64) :i64 {
+    set p = resp :ptr
+    return pal::read_u64(pal::ptr_add(p, 8))
+}
+
+pub fn response_body: (resp :i64) :i64 {
+    set p = resp :ptr
+    return pal::read_u64(pal::ptr_add(p, 16))
+}
+
+pub fn response_set_headers: (resp :i64, headers :i64) :i64 {
+    set p = resp :ptr
+    pal::write_u64(pal::ptr_add(p, 8), headers)
+    return resp
+}
+
+pub fn response_set_body: (resp :i64, body :i64) :i64 {
+    set p = resp :ptr
+    pal::write_u64(pal::ptr_add(p, 16), body)
+    return resp
+}
+
+// ── Client ──────────────────────────────────────────────────────
+
+pub struct Client {
+    base_url :i64
+    default_headers :i64
+    timeout :i64
+}
+
+pub fn client_new: (base_url :str) :i64 {
+    set url = url::parse(base_url)
+    set buf = bytes::alloc(24)
+    set p = buf
+    pal::write_u64(p, url)
+    pal::write_u64(pal::ptr_add(p, 8), 0) // default_headers
+    pal::write_u64(pal::ptr_add(p, 16), 30000) // timeout ms
+    return buf :i64
+}
+
+pub fn client_request: (client :i64, req :i64) :i64 {
+    return rt_client_request(client, req)
+}
+
+pub fn client_get: (client :i64, url :str) :i64 {
+    set req = request_new(METHOD_GET, url::parse(url))
+    return client_request(client, req)
+}
+
+pub fn client_post: (client :i64, url :str, body :i64) :i64 {
+    set req = request_new(METHOD_POST, url::parse(url))
+    set req = request_set_body(req, body)
+    return client_request(client, req)
+}
+
+pub fn client_put: (client :i64, url :str, body :i64) :i64 {
+    set req = request_new(METHOD_PUT, url::parse(url))
+    set req = request_set_body(req, body)
+    return client_request(client, req)
+}
+
+pub fn client_delete: (client :i64, url :str) :i64 {
+    set req = request_new(METHOD_DELETE, url::parse(url))
+    return client_request(client, req)
+}
+
+// ── Cookies ────────────────────────────────────────────────────
+
+pub struct Cookie {
+    name :str
+    value :str
+    domain :str
+    path :str
+    expires :i64
+    secure :bool
+    http_only :bool
+}
+
+pub fn cookie_parse: (header :str) :i64 {
+    return rt_cookie_parse(header)
+}
+
+pub fn cookie_serialize: (cookie :i64) :str {
+    return rt_cookie_serialize(cookie)
+}
+
+pub fn cookie_jar_new: () :i64 {
+    return base::object()
+}
+
+pub fn cookie_jar_add: (jar :i64, cookie :i64) :i64 {
+    // Use cookie name as key
+    return jar // placeholder
+}
+
+pub fn cookie_jar_get: (jar :i64, name :str) :i64 {
+    return base::object_get(jar, name)
+}
+
+// ── Extern declarations ────────────────────────────────────────
+
+extern fn rt_client_request: (client :i64, req :i64) :i64 lib "pal"
+extern fn rt_cookie_parse: (header :str) :i64 lib "pal"
+extern fn rt_cookie_serialize: (cookie :i64) :str lib "pal"
+
+load ilogical::base
+load ilogical::url
+load mire::vec
+load mire::str
+load mire::aux::pal

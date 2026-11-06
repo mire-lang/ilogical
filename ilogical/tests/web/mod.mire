@@ -1,0 +1,151 @@
+load ilogical::web
+load ilogical::base
+
+// ============================================================
+// ilogical::web — Tests for HTTP client, request/response, headers
+// ============================================================
+
+// ── Methods ────────────────────────────────────────────────
+
+@[test]
+pub fn test_method_constants: () :bool {
+    return web::METHOD_GET == 0 &&
+           web::METHOD_POST == 1 &&
+           web::METHOD_PUT == 2 &&
+           web::METHOD_DELETE == 3 &&
+           web::METHOD_PATCH == 4 &&
+           web::METHOD_HEAD == 5 &&
+           web::METHOD_OPTIONS == 6
+}
+
+@[test]
+pub fn test_method_name: () :bool {
+    return web::method_name(web::METHOD_GET) == "GET" &&
+           web::method_name(web::METHOD_POST) == "POST" &&
+           web::method_name(web::METHOD_PUT) == "PUT" &&
+           web::method_name(web::METHOD_DELETE) == "DELETE" &&
+           web::method_name(web::METHOD_PATCH) == "PATCH" &&
+           web::method_name(web::METHOD_HEAD) == "HEAD" &&
+           web::method_name(web::METHOD_OPTIONS) == "OPTIONS"
+}
+
+@[test]
+pub fn test_method_from_str: () :bool {
+    return web::method_from_str("GET") == web::METHOD_GET &&
+           web::method_from_str("POST") == web::METHOD_POST &&
+           web::method_from_str("PUT") == web::METHOD_PUT &&
+           web::method_from_str("DELETE") == web::METHOD_DELETE &&
+           web::method_from_str("PATCH") == web::METHOD_PATCH &&
+           web::method_from_str("HEAD") == web::METHOD_HEAD &&
+           web::method_from_str("OPTIONS") == web::METHOD_OPTIONS &&
+           web::method_from_str("INVALID") == -1
+}
+
+// ── Headers ────────────────────────────────────────────────
+
+@[test]
+pub fn test_headers_new: () :bool {
+    set h = web::headers_new()
+    return base::is_object(h)
+}
+
+@[test]
+pub fn test_headers_set_get: () :bool {
+    set h = web::headers_new()
+    set h = web::headers_set(h, "Content-Type", "application/json")
+    return web::headers_get(h, "Content-Type") == "application/json"
+}
+
+@[test]
+pub fn test_headers_has: () :bool {
+    set h = web::headers_new()
+    set h = web::headers_set(h, "X-Custom", "value")
+    return web::headers_has(h, "X-Custom") == true &&
+           web::headers_has(h, "Missing") == false
+}
+
+@[test]
+pub fn test_headers_multiple: () :bool {
+    set h = web::headers_new()
+    set h = web::headers_set(h, "A", "1")
+    set h = web::headers_set(h, "B", "2")
+    set h = web::headers_set(h, "C", "3")
+    return web::headers_get(h, "A") == "1" &&
+           web::headers_get(h, "B") == "2" &&
+           web::headers_get(h, "C") == "3"
+}
+
+// ── Request ────────────────────────────────────────────────
+
+@[test]
+pub fn test_request_new: () :bool {
+    set req = web::request_new(web::METHOD_GET, base::int(0))
+    return base::is_object(req)
+}
+
+@[test]
+pub fn test_request_method: () :bool {
+    set req = web::request_new(web::METHOD_POST, base::int(0))
+    return web::request_method(req) == web::METHOD_POST
+}
+
+@[test]
+pub fn test_request_url: () :bool {
+    set url = base::int(42)
+    set req = web::request_new(web::METHOD_GET, url)
+    return web::request_url(req) == url
+}
+
+@[test]
+pub fn test_request_set_header: () :bool {
+    set req = web::request_new(web::METHOD_GET, base::int(0))
+    set req = web::request_set_header(req, "X-Test", "value")
+    set h = web::request_headers(req)
+    return web::headers_get(h, "X-Test") == "value"
+}
+
+@[test]
+pub fn test_request_set_body: () :bool {
+    set req = web::request_new(web::METHOD_POST, base::int(0))
+    set body = base::string("test body")
+    set req = web::request_set_body(req, body)
+    return web::request_body(req) == body
+}
+
+// ── Response ──────────────────────────────────────────────
+
+@[test]
+pub fn test_response_new: () :bool {
+    set resp = web::response_new(200)
+    return base::is_object(resp)
+}
+
+@[test]
+pub fn test_response_status: () :bool {
+    set resp = web::response_new(404)
+    return web::response_status(resp) == 404
+}
+
+@[test]
+pub fn test_response_set_body: () :bool {
+    set resp = web::response_new(200)
+    set body = base::string("response body")
+    set resp = web::response_set_body(resp, body)
+    return web::response_body(resp) == body
+}
+
+// ── Client ────────────────────────────────────────────────
+
+@[test]
+pub fn test_client_new: () :bool {
+    set client = web::client_new("http://example.com")
+    return base::is_object(client)
+}
+
+// ── Cookies ───────────────────────────────────────────────
+
+@[test]
+pub fn test_cookie_jar_new: () :bool {
+    set jar = web::cookie_jar_new()
+    return base::is_object(jar)
+}
