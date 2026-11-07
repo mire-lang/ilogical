@@ -17,6 +17,8 @@ debug-info = true
 
 [paths]
 sources = "src"
+tests = "tests"
+output = "bin"
 cache = "bin/.cache"
 
 [security]
@@ -35,6 +37,7 @@ schema = "src/schema"
 encoding = "src/encoding"
 web = "src/web"
 url = "src/url"
+tests = "tests"
 
 [bin]
 serve = "src/serve.mr"
