@@ -6,6 +6,7 @@ module schema
 load ilogical::base
 load mire::vec
 load mire::str
+load mire::aux::pal
 
 // ── Schema types ────────────────────────────────────────────────
 
@@ -113,7 +114,6 @@ pub fn object_field: (schema :i64, name :str, field_schema :i64, required :bool)
     if kind != SCH_OBJECT { return schema }
     set fields = pal::read_u64(pal::ptr_add(p, 16)) :ptr
     set key = str::copy(name) :ptr
-    set value = base::int(if required { 1 } else { 0 })
     // Store as tuple (field_schema, required)
     // For simplicity, we'll use a compound value
     set field_obj = base::object()
@@ -134,7 +134,10 @@ pub fn validate: (schema :i64, value :i64) :i64 {
     set kind = pal::read_u64(p)
     if kind == SCH_ANY { return 0 }
     if kind == SCH_TYPE {
-        return validate_type(pal::read_u64(pal::ptr_add(p, 8)) :ptr, value)
+        set tn_ptr = pal::read_u64(pal::ptr_add(p, 8)) :ptr
+        set tn = tn_ptr :ptr
+        set expected = str::copy(tn :str)
+        return validate_type(expected, value)
     }
     if kind == SCH_OBJECT {
         return validate_object(pal::read_u64(pal::ptr_add(p, 16)) :ptr, value)
@@ -152,8 +155,7 @@ pub fn validate: (schema :i64, value :i64) :i64 {
     return base::error("unknown schema kind")
 }
 
-fn validate_type: (type_name :ptr, value :i64) :i64 {
-    set expected = str::copy(type_name :ptr :str)
+fn validate_type: (expected :str, value :i64) :i64 {
     set actual = base::type_name(value)
     if expected == actual { return 0 }
     return base::error("type mismatch: expected " + expected + ", got " + actual)
@@ -201,7 +203,7 @@ pub fn schema_type_name: (schema :i64) :str {
     if kind == SCH_ANY { return "any" }
     if kind == SCH_TYPE { 
         set tn = pal::read_u64(pal::ptr_add(p, 8)) :ptr
-        return str::copy(tn :ptr :str)
+        return str::copy(tn :str)
     }
     if kind == SCH_OBJECT { return "object" }
     if kind == SCH_ARRAY { return "array" }
@@ -212,4 +214,6 @@ pub fn schema_type_name: (schema :i64) :str {
 
 load ilogical::base
 load mire::vec
+load mire::str
 load mire::aux::pal
+load mire::bytes

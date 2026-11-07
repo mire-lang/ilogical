@@ -35,13 +35,13 @@ fn parse_addr: (s :str) :i64 {
     set colon = strings::index(s, ":")
     if colon < 0 {
         // No port, use default
-        pal::write_u64(p, s :ptr :i64)
+        pal::write_u64(p, (s :ptr) :i64)
         pal::write_u64(pal::ptr_add(p, 8), 8080)
     } else {
         set host = strings::substr(s, 0, colon)
         set port_str = strings::substr(s, colon + 1, len(s) - colon - 1)
         set port = rt_string_to_i64(port_str)
-        pal::write_u64(p, host :ptr :i64)
+        pal::write_u64(p, (host :ptr) :i64)
         pal::write_u64(pal::ptr_add(p, 8), port)
     }
     return buf :i64

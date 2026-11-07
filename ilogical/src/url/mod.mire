@@ -45,13 +45,13 @@ pub fn build: () :i64 {
 
 pub fn set_scheme: (url :i64, scheme :str) :i64 {
     set p = url :ptr
-    pal::write_u64(pal::ptr_add(p, 0), scheme :ptr :i64)
+    pal::write_u64(pal::ptr_add(p, 0), (scheme :ptr) :i64)
     return url
 }
 
 pub fn set_host: (url :i64, host :str) :i64 {
     set p = url :ptr
-    pal::write_u64(pal::ptr_add(p, 8), host :ptr :i64)
+    pal::write_u64(pal::ptr_add(p, 8), (host :ptr) :i64)
     return url
 }
 
@@ -63,7 +63,7 @@ pub fn set_port: (url :i64, port :i64) :i64 {
 
 pub fn set_path: (url :i64, path :str) :i64 {
     set p = url :ptr
-    pal::write_u64(pal::ptr_add(p, 24), path :ptr :i64)
+    pal::write_u64(pal::ptr_add(p, 24), (path :ptr) :i64)
     return url
 }
 
@@ -75,7 +75,7 @@ pub fn set_query: (url :i64, query :i64) :i64 {
 
 pub fn set_fragment: (url :i64, fragment :str) :i64 {
     set p = url :ptr
-    pal::write_u64(pal::ptr_add(p, 40), fragment :ptr :i64)
+    pal::write_u64(pal::ptr_add(p, 40), (fragment :ptr) :i64)
     return url
 }
 
@@ -125,19 +125,19 @@ pub fn to_string: (url :i64) :str {
 pub fn host: (url :i64) :str {
     set p = url :ptr
     set h = pal::read_u64(pal::ptr_add(p, 8)) :ptr
-    return str::copy(h :ptr :str)
+    return str::copy(h :str)
 }
 
 pub fn path: (url :i64) :str {
     set p = url :ptr
     set h = pal::read_u64(pal::ptr_add(p, 24)) :ptr
-    return str::copy(h :ptr :str)
+    return str::copy(h :str)
 }
 
 pub fn scheme: (url :i64) :str {
     set p = url :ptr
     set h = pal::read_u64(p) :ptr
-    return str::copy(h :ptr :str)
+    return str::copy(h :str)
 }
 
 pub fn port: (url :i64) :i64 {
@@ -153,7 +153,7 @@ pub fn query: (url :i64) :i64 {
 pub fn fragment: (url :i64) :str {
     set p = url :ptr
     set h = pal::read_u64(pal::ptr_add(p, 40)) :ptr
-    return str::copy(h :ptr :str)
+    return str::copy(h :str)
 }
 
 // ── Extern declarations ─────────────────────────────────────────
