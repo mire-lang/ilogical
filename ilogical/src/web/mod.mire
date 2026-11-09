@@ -126,7 +126,7 @@ pub fn request_set_body: (req :i64, body :i64) :i64 {
 }
 
 pub fn request_set_header: (req :i64, name :str, value :str) :i64 {
-    set h = request_headers(req)
+    set h = request_headers(req) mut
     if h == 0 {
         set h = base::object()
         set p = req :ptr
@@ -207,13 +207,13 @@ pub fn client_get: (client :i64, url :str) :i64 {
 }
 
 pub fn client_post: (client :i64, url :str, body :i64) :i64 {
-    set req = request_new(METHOD_POST, url::parse(url))
+    set req = request_new(METHOD_POST, url::parse(url)) mut
     set req = request_set_body(req, body)
     return client_request(client, req)
 }
 
 pub fn client_put: (client :i64, url :str, body :i64) :i64 {
-    set req = request_new(METHOD_PUT, url::parse(url))
+    set req = request_new(METHOD_PUT, url::parse(url)) mut
     set req = request_set_body(req, body)
     return client_request(client, req)
 }
@@ -261,9 +261,3 @@ pub fn cookie_jar_get: (jar :i64, name :str) :i64 {
 extern fn rt_client_request: (client :i64, req :i64) :i64 lib "pal"
 extern fn rt_cookie_parse: (header :str) :i64 lib "pal"
 extern fn rt_cookie_serialize: (cookie :i64) :str lib "pal"
-
-load ilogical::base
-load ilogical::url
-load mire::vec
-load mire::str
-load mire::aux::pal

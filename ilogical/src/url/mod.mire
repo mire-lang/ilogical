@@ -165,9 +165,3 @@ extern fn rt_url_resolve_str: (base :str, relative :str) :str lib "pal"
 extern fn rt_url_to_string: (url :i64) :str lib "pal"
 extern fn rt_query_parse: (s :str) :i64 lib "pal"
 extern fn rt_query_stringify: (params :i64) :str lib "pal"
-
-load ilogical::base
-load ilogical::encoding
-load mire::str
-load mire::vec
-load mire::aux::pal

@@ -109,19 +109,20 @@ pub fn custom_schema: (validator_fn :i64) :i64 {
 
 pub fn object_field: (schema :i64, name :str, field_schema :i64, required :bool) :i64 {
     // Add field to object schema
-    set base = schema :ptr
+    set p = schema :ptr
     set kind = pal::read_u64(p)
     if kind != SCH_OBJECT { return schema }
-    set fields = pal::read_u64(pal::ptr_add(p, 16)) :ptr
+    set fields_raw = pal::read_u64(pal::ptr_add(p, 16))
+    set fields = fields_raw :ptr
     set key = str::copy(name) :ptr
     // Store as tuple (field_schema, required)
     // For simplicity, we'll use a compound value
-    set field_obj = base::object()
+    set field_obj = base::object() mut
     set field_obj = base::object_set(field_obj, "schema", field_schema)
     set field_obj = base::object_set(field_obj, "required", base::int(if required { 1 } else { 0 }))
-    set new_fields = base::object_buf_push(fields, str::copy(name) :ptr, field_obj)
+    set new_fields = base::object_buf_push(fields, key, field_obj)
     if new_fields != fields {
-        pal::write_u64(pal::ptr_add(base, 16), new_fields :i64)
+        pal::write_u64(pal::ptr_add(p, 16), new_fields :i64)
     }
     return schema
 }
@@ -130,7 +131,7 @@ pub fn object_field: (schema :i64, name :str, field_schema :i64, required :bool)
 
 pub fn validate: (schema :i64, value :i64) :i64 {
     // Returns 0 for valid, error handle for invalid
-    set base = schema :ptr
+    set p = schema :ptr
     set kind = pal::read_u64(p)
     if kind == SCH_ANY { return 0 }
     if kind == SCH_TYPE {
@@ -140,7 +141,9 @@ pub fn validate: (schema :i64, value :i64) :i64 {
         return validate_type(expected, value)
     }
     if kind == SCH_OBJECT {
-        return validate_object(pal::read_u64(pal::ptr_add(p, 16)) :ptr, value)
+        set fields_raw = pal::read_u64(pal::ptr_add(p, 16))
+        set fields = fields_raw :ptr
+        return validate_object(fields, value)
     }
     if kind == SCH_ARRAY {
         return validate_array(pal::read_u64(pal::ptr_add(p, 24)), value)
@@ -162,14 +165,14 @@ fn validate_type: (expected :str, value :i64) :i64 {
 }
 
 fn validate_object: (fields :ptr, value :i64) :i64 {
-    if base::kind(value) != base::K_OBJECT { return base::error("expected object") }
+    if !base::is_object(value) { return base::error("expected object") }
     // Check required fields
     // For simplicity, just check that all schema fields exist in value
     return 0 // placeholder
 }
 
 fn validate_array: (item_schema :i64, value :i64) :i64 {
-    if base::kind(value) != base::K_ARRAY { return base::error("expected array") }
+    if !base::is_array(value) { return base::error("expected array") }
     set len = base::array_len(value)
     set i = 0 :i64 mut
     while i < len {
@@ -198,7 +201,7 @@ fn validate_union: (schemas :i64, value :i64) :i64 {
 // ── Schema introspection ───────────────────────────────────────
 
 pub fn schema_type_name: (schema :i64) :str {
-    set base = schema :ptr
+    set p = schema :ptr
     set kind = pal::read_u64(p)
     if kind == SCH_ANY { return "any" }
     if kind == SCH_TYPE { 
@@ -211,9 +214,3 @@ pub fn schema_type_name: (schema :i64) :str {
     if kind == SCH_CUSTOM { return "custom" }
     return "unknown"
 }
-
-load ilogical::base
-load mire::vec
-load mire::str
-load mire::aux::pal
-load mire::bytes
