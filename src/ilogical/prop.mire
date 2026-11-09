@@ -1,0 +1,25 @@
+module prop
+
+load ilogical::core
+
+// Propositional logic tactics and utilities
+
+pub fn simplify: (p: Prop) -> Prop {
+    // Simplify proposition (placeholder)
+    return p
+}
+
+pub fn is_tautology: (p: Prop) -> bool {
+    // Check if proposition is a tautology (placeholder)
+    return false
+}
+
+pub fn nnf: (p: Prop) -> Prop {
+    // Convert to negation normal form (placeholder)
+    return p
+}
+
+pub fn cnf: (p: Prop) -> Prop {
+    // Convert to conjunctive normal form (placeholder)
+    return p
+}

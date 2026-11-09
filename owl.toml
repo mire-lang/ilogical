@@ -1,0 +1,32 @@
+[project]
+name = "ilogical"
+version = "0.1.0-alpha"
+description = "Logical reasoning and proof assistant library for Mire"
+entry = "src/lib.mire"
+
+[build]
+compiler = "mire"
+profile = "debug"
+opt-level = 0
+artifact = "shared"
+runtime = "minimal"
+target = "x86_64-unknown-linux-gnu"
+panic = "abort"
+incremental = true
+debug-info = true
+
+[paths]
+sources = "src"
+tests = "tests"
+output = "bin"
+cache = "bin/.cache"
+source = "src"
+test = "tests"
+bin = "bin"
+generated = "bin/generated"
+
+[dependencies]
+mire = { path = "../mire", version = "2.1.0-beta" }
+
+[exports]
+ilogical = "src/ilogical"

@@ -1,0 +1,35 @@
+module tactic
+
+load ilogical::core
+
+// Proof tactics
+
+pub struct Goal {
+    pub conclusion: Prop,
+    pub hypotheses: Vec[Prop],
+}
+
+pub struct ProofState {
+    pub goals: Vec[Goal],
+}
+
+pub fn apply: (state: &mut ProofState, tactic: Tactic) -> bool {
+    // Apply tactic to proof state (placeholder)
+    return true
+}
+
+pub enum Tactic {
+    Intro,
+    Elim,
+    Simplify,
+    Auto,
+    Tauto,
+    Induction(i64),
+}
+
+pub fn intro: () -> Tactic { return Tactic::Intro }
+pub fn elim: () -> Tactic { return Tactic::Elim }
+pub fn simplify: () -> Tactic { return Tactic::Simplify }
+pub fn auto: () -> Tactic { return Tactic::Auto }
+pub fn tauto: () -> Tactic { return Tactic::Tauto }
+pub fn induction: (n: i64) -> Tactic { return Tactic::Induction(n) }

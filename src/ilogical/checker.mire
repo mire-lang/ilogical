@@ -1,0 +1,24 @@
+module checker
+
+load ilogical::core
+
+// Type checker and proof verifier
+
+pub struct TypeError {
+    pub message: str,
+}
+
+pub fn check_prop: (ctx: &Context, p: Prop) -> Result[Prop, TypeError] {
+    // Type check proposition (placeholder)
+    return Ok(p)
+}
+
+pub fn verify_proof: (state: ProofState) -> bool {
+    // Verify proof (placeholder)
+    return true
+}
+
+pub fn check_well_formed: (p: Prop) -> bool {
+    // Check well-formedness (placeholder)
+    return true
+}

@@ -1,0 +1,24 @@
+module fol
+
+load ilogical::core
+
+// First-order logic utilities
+
+pub fn skolemize: (p: Prop) -> Prop {
+    // Skolemization (placeholder)
+    return p
+}
+
+pub fn herbrand_universe: (p: Prop) -> Vec[Prop] {
+    // Herbrand universe (placeholder)
+    return Vec::new()
+}
+
+pub fn unify: (t1: Prop, t2: Prop) -> Option[Subst] {
+    // Unification (placeholder)
+    return None
+}
+
+pub struct Subst {
+    pub mappings: Vec[(i64, Prop)],
+}

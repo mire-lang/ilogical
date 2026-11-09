@@ -1,0 +1,39 @@
+module core
+
+// Core logical types and definitions
+
+// Proposition type
+pub struct Prop {
+    pub kind: PropKind
+}
+
+pub enum PropKind {
+    True,
+    False,
+    Var(i64),
+    Not(Prop),
+    And(Prop, Prop),
+    Or(Prop, Prop),
+    Imp(Prop, Prop),
+    Iff(Prop, Prop),
+    Forall(i64, Prop),
+    Exists(i64, Prop),
+}
+
+// Context for variable management
+pub struct Context {
+    pub vars: Vec[i64],
+    pub assumptions: Vec[Prop],
+}
+
+pub fn context_new: () -> Context {
+    return Context { vars: Vec::new(), assumptions: Vec::new() }
+}
+
+pub fn context_add_var: (ctx: &mut Context, name: i64) {
+    ctx.vars.push(name)
+}
+
+pub fn context_add_assumption: (ctx: &mut Context, p: Prop) {
+    ctx.assumptions.push(p)
+}

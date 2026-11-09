@@ -1,0 +1,20 @@
+module parser
+
+load ilogical::core
+
+// Parser for logical formulas
+
+pub fn parse_prop: (input: &str) -> Option[Prop] {
+    // Parse propositional formula (placeholder)
+    return None
+}
+
+pub fn parse_fol: (input: &str) -> Option[Prop] {
+    // Parse first-order formula (placeholder)
+    return None
+}
+
+pub fn format_prop: (p: Prop) -> str {
+    // Format proposition as string (placeholder)
+    return "Prop"
+}

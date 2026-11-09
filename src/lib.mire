@@ -1,0 +1,10 @@
+// ilogical v0.1.0-alpha
+// Logical reasoning and proof assistant library for Mire
+
+// Re-export all modules
+pub use ilogical::core
+pub use ilogical::prop
+pub use ilogical::fol
+pub use ilogical::tactic
+pub use ilogical::parser
+pub use ilogical::checker

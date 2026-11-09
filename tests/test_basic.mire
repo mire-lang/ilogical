@@ -1,0 +1,32 @@
+load ilogical::core
+load ilogical::prop
+load ilogical::tactic
+
+@[test]
+pub fn test_context: () :bool {
+    set ctx = context_new()
+    context_add_var(&mut ctx, 1)
+    context_add_var(&mut ctx, 2)
+    return ctx.vars.length == 2
+}
+
+@[test]
+pub fn test_prop_simplify: () :bool {
+    set p = core::Prop { kind: core::PropKind::True }
+    set simplified = prop::simplify(p)
+    return simplified.kind == core::PropKind::True
+}
+
+pub fn main: () :i32 {
+    set results = [test_context(), test_prop_simplify()]
+    set all_pass = true
+    set i = 0 :i64 mut
+    while i < 2 {
+        if results[i] == false {
+            set all_pass = false
+        }
+        set i += 1
+    }
+    if all_pass { return 0 :i32 }
+    return 1 :i32
+}
