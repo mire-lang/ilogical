@@ -435,8 +435,8 @@ Consecuencias:
 **Estado actual [verificado]:**
 
 - `avenys/src/protocol/messages.rs` define `CompileRequest`/`CompileResponse` v1 con goldens (`src/protocol/golden/v1_*.hex`).
-- `owl/code/protocol/messages.mire` + `wire.mire` implementan el mismo codec en Mire (938 líneas) y **nadie los usa**.
-- Owl invoca `rt_proc_capture_argv2(mire, args, …)` (`owl/code/util/mod.mire:646`) y pasa un TOML temporal con `--config`.
+- `owl/src/protocol/messages.mire` + `wire.mire` implementan el mismo codec en Mire (938 líneas) y **nadie los usa**.
+- Owl invoca `rt_proc_capture_argv2(mire, args, …)` (`owl/src/util/mod.mire:646`) y pasa un TOML temporal con `--config`.
 
 **Objetivo:** el protobuf es la única interfaz de build.
 
@@ -725,13 +725,13 @@ Mientras no exista `asm("syscall")` o `syscall6` intrínseco, el shim `mire_sysc
 ## 6. Owl — gestor de proyectos
 
 **Versión actual:** 1.6.12 (`owl/owl.toml`)
-**Tamaño:** ~10 291 líneas Mire en `owl/code/`
+**Tamaño:** ~10 291 líneas Mire en `owl/src/`
 **Rol objetivo:** resolver el grafo de dependencias y producir un `CompileRequest`. No compila.
 
 ### 6.1 Separación arquitectónica
 
 ```text
-owl/code/
+owl/src/
 ├── compiler/          # NUEVO: todo lo que Avenys necesita
 │   ├── request.mire   # CompileRequest v2
 │   ├── flags.mire     # traducción de opciones a flags
@@ -775,10 +775,10 @@ run      = "code/commands/run"
 
 | Archivo | Línea | Problema |
 |---------|-------|----------|
-| `owl/code/lockfile/mod.mire` | 204-457 | `generate()` tiene un bloque duplicado casi literal (~280-434 y ~340-434) |
-| `owl/code/lockfile/mod.mire` | 54-141 | `in_sync()` compara por conteo de líneas, no por entradas |
-| `owl/code/lockfile/mod.mire` | 686-700 | `all()` descarga si `pkg_path == ""` o el path no existe, sin comprobar versión+hash local |
-| `owl/code/build/mod.mire` | 157-174 | `ensure_project_dependencies` llama a `install::run` siempre que `in_sync()` sea falso |
+| `owl/src/lockfile/mod.mire` | 204-457 | `generate()` tiene un bloque duplicado casi literal (~280-434 y ~340-434) |
+| `owl/src/lockfile/mod.mire` | 54-141 | `in_sync()` compara por conteo de líneas, no por entradas |
+| `owl/src/lockfile/mod.mire` | 686-700 | `all()` descarga si `pkg_path == ""` o el path no existe, sin comprobar versión+hash local |
+| `owl/src/build/mod.mire` | 157-174 | `ensure_project_dependencies` llama a `install::run` siempre que `in_sync()` sea falso |
 
 **Comportamiento observado:** un proyecto nuevo con dependencias ya instaladas en `~/.owl/libs` intenta instalar/descargar antes de compilar. Sin red, bloquea.
 
@@ -1133,7 +1133,7 @@ Cobertura mínima (TOML 1.0):
 
 **Este parser reemplaza:**
 - `mire/code/c/toml_parser.c`
-- `owl/code/util/mod.mire` `toml_get*`/`toml_set`
+- `owl/src/util/mod.mire` `toml_get*`/`toml_set`
 - `kioto/modules/toml/mod.mire`
 
 ### 8.6 Encoding, URL y Web
@@ -2137,11 +2137,11 @@ No se usa cobertura de líneas ni `llvm-cov` como criterio de aceptación. El re
 
 | Elemento | Acción |
 |----------|--------|
-| `code/`, `docs/`, `scripts/`, `tests/`, `native/`, `owl/` | Mantener |
+| `src/`, `docs/`, `scripts/`, `tests/`, `native/`, `owl/` | Mantener |
 | `bin/`, `.owl/` | **Borrar** |
-| `code/lockfile` duplicado | Refactor (§6.2) |
-| `code/_externs` | Migrar a `mire::pal` |
-| `code/{server,trust,upgrade}` | Revisar alcance; documentar o mover |
+| `src/lockfile` duplicado | Refactor (§6.2) |
+| `src/_externs` | Migrar a `mire::pal` |
+| `src/{server,trust,upgrade}` | Revisar alcance; documentar o mover |
 
 ### 12.6 `.gitignore` mínimo por repo
 
