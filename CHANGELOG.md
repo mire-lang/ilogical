@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limit and anomaly behaviour. Run them with:
 
   ```bash
-  mire test tests --lib-dir /path/to/Arch
+  mire test tests --lib-dir "$PWD/.."
   ```
 
 ### Known limitations

@@ -11,7 +11,6 @@ Define structural schemas for Values and validate data against them.
 | `object_schema()` | Object with defined fields |
 | `array_schema(item)` | Array with uniform item schema |
 | `union_schema(schemas)` | One of multiple schemas |
-| `custom_schema(fn)` | Custom validator function |
 
 ## Object Fields
 
@@ -35,7 +34,10 @@ Validation rules:
 - `object`: All required fields present, all fields match their schemas
 - `array`: All items match item schema
 - `union`: At least one variant matches
-- `custom`: Calls validator function (stub)
+
+There is no custom-validator schema. Application-specific rules are checked by
+walking the value after the structural `validate` call; see
+[known limits](../bugs/README.md#no-custom-schema-validator).
 
 ## Example
 

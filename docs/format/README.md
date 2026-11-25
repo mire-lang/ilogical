@@ -36,10 +36,17 @@ set toml = format::toml_encode(decoded)
 set bin = format::bin_encode(decoded)
 ```
 
-## Implementation Status
+## Errors and limits
 
-- JSON: Stub (delegates to PAL `rt_json_*`)
-- TOML: Stub (delegates to PAL `rt_toml_*`)
-- Binary: Stub (delegates to PAL `rt_bin_*`)
-
-Runtime implementations needed in PAL.
+- **JSON** is written and parsed here, in Mire. A decode failure returns an
+  error `Value` carrying the position, line and column; test it with
+  `base::is_error`. A trailing token after the document is an error, not
+  ignored. `json_encode` of an error value writes `null`.
+- **TOML** documents are tables. `toml_encode` of a non-object writes an inline
+  fragment, which `toml_decode` will reject; wrap scalars and arrays in an
+  object when the output must round-trip. See
+  [known limits](../bugs/README.md#toml-documents-are-tables).
+- **Binary** is a MessagePack-inspired format private to this package. It is
+  versioned by the first byte and is not compatible with MessagePack decoders;
+  `bin_decode` returns an error `Value` on a version or tag mismatch.
+- None of the codecs stream: the input must be a complete `str` or buffer.

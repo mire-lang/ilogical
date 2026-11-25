@@ -11,9 +11,9 @@ Modular documentation for the ilogical library.
 | [schema](./schema/) | Schema definition and validation |
 | [encoding](./encoding/) | Base64, Hex, Percent encoding |
 | [url](./url/) | URL parsing, building, resolution |
-| [web](./web/) | HTTP client, request/response, headers, cookies |
+| [web](./web/) | HTTP message types: methods, headers, request/response, client config, cookies |
 | [benchmarks](./benchmarks/) | Performance benchmarks |
-| [bugs](./bugs/) | Known issues and workarounds |
+| [bugs](./bugs/) | Known limits and deliberate omissions |
 
 ## Quick Start
 
@@ -31,9 +31,15 @@ pub fn main: () {
 ## Testing
 
 ```bash
-mire test tests/ --lib-dir /path/to/ilogical
+# from this repository
+mire test tests --lib-dir "$PWD/.."
 ```
 
-## Known Issues
+`--lib-dir` names a directory of packages, so it points at the parent of this
+repository. The suites live under `tests/`, one directory per module, with a
+`symbols/` subdirectory holding the per-symbol cases.
 
-See [bugs](./bugs/) for current limitations.
+## Known limits
+
+See [bugs](./bugs/) for the deliberate omissions: no HTTP transport, TOML
+documents are tables, no custom schema validator, and no streaming codecs.

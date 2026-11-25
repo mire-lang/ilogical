@@ -33,4 +33,11 @@ RFC 3986 compliant. Encodes all except alphanumeric, `-`, `.`, `_`, `~`.
 
 ## Implementation
 
-All functions delegate to PAL runtime (`rt_base64_*`, `rt_hex_*`, `rt_percent_*`). Runtime implementations needed.
+Pure Mire, over `mire::bytes` and `mire::aux::pal`. There is no PAL codec call:
+the base64, hex and percent alphabets are built in `ilogical` itself, so the
+result is the same in every runtime tier.
+
+Decoding returns an `i64` handle to a byte value; read it with
+`base::as_bytes_ptr` and `base::as_bytes_len`. Use the `_to_ptr` variants
+(`base64_decode_to_ptr`, `base64_url_decode_to_ptr`, `hex_decode_to_ptr`) when
+the caller wants the raw pointer and length without wrapping them in a value.

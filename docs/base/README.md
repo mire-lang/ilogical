@@ -104,12 +104,21 @@ pub fn to_string: (h :i64) :str
 
 Outputs JSON-like format: `null`, `true`/`false`, numbers, strings, `[...]`, `{...}`, `<N bytes>`.
 
-## Known Issues
+## Growth
 
-- **object_set buffer reallocation**: When `object_buf_push` allocates a new buffer, the old buffer pointer in the Value record may become stale. Workaround: avoid rapid sequential `object_set` calls on the same object, or pre-size with many fields at once.
+`object_set` returns the same handle. When the buffer is full it allocates a
+larger one, copies the keys and values, and writes the new pointer back into the
+record, so the handle stays valid and the previous buffer is no longer
+referenced. Arrays behave the same way through `array_push`.
 
-## Implementation Notes
+Both grow by doubling, from an initial capacity of 4. Objects store keys and
+values in one allocation: `[capacity][length][keys: ptr * cap][values: i64 * cap]`.
 
-- Uses `pal::ptr_add` + `pal::read_u64`/`pal::write_u64` instead of `bytes::read_u64`/`bytes::write_u64` to avoid Mire's bug at offsets 8, 24, 40, 56.
-- All operations take `i64` handles directly (not `&Value`) to avoid Mire's struct field access bug with references.
-- Values are Copy (just i64) so ownership is simple.
+## Implementation notes
+
+- Record access goes through `pal::ptr_add` plus `pal::read_u64` /
+  `pal::write_u64`. The package does not depend on how `mire::bytes` handles
+  offsets, which keeps the record layout explicit in one place.
+- Every operation takes an `i64` handle, not a `&Value`. A `Value` is a plain
+  `i64`, so passing it by value is the ownership model: no destructor, no
+  reference count, and `clone` is the only way to duplicate a container.

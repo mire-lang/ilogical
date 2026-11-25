@@ -7,7 +7,9 @@ pub fn parse: (s :str) :i64
 pub fn parse_with_base: (s :str, base :i64) :i64
 ```
 
-Returns a `URL` struct handle.
+Returns a `base::Value` object handle. A URL is not a bespoke struct; it is an
+object with the keys below, so `base::object_get` works on it like on any other
+value.
 
 ## Building
 
@@ -54,13 +56,16 @@ pub fn query: (url :i64) :i64
 pub fn fragment: (url :i64) :str
 ```
 
-## URL Struct
+## URL value
 
-```
-offset 0: scheme ptr
-offset 8: host ptr
-offset 16: port (i64)
-offset 24: path ptr
-offset 32: query ptr (base::Value object)
-offset 40: fragment ptr
-```
+| Key | Type | Default |
+|-----|------|---------|
+| `scheme` | string | `""` |
+| `host` | string | `""` |
+| `port` | int | `0` |
+| `path` | string | `""` |
+| `query` | object | empty |
+| `fragment` | string | `""` |
+
+`parse` fills the same keys, and `to_string` reads them back. A missing port is
+`0`; a query is always an object, empty when the URL has no `?`.
