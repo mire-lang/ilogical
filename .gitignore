@@ -1,0 +1,18 @@
+# Build output
+bin/
+target/
+.cobject_cache/
+
+# Test output
+tests/log/
+*.log
+
+# Per-symbol suites: fixtures are throwaway, logs are generated per run.
+# The .gitkeep is the only tracked file inside a logs/ directory.
+tests/**/fixtures/tmp/*
+!tests/**/fixtures/tmp/.gitkeep
+tests/**/logs/*
+!tests/**/logs/.gitkeep
+
+# owl writes this into the project root on every build
+write_mire_config_debug.txt

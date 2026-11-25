@@ -1,0 +1,188 @@
+module schema
+
+// ilogical::schema — structural schemas for base::Value.
+//
+// A schema is itself a base::Value object, so it is owned, inspectable, and
+// serializable with the rest of ilogical. The keys are:
+//
+//   "kind"        int, one of the SCH_* constants below
+//   "type_name"   string, only for SCH_TYPE
+//   "fields"      object name -> { "schema": <schema>, "required": bool },
+//                 only for SCH_OBJECT
+//   "items"       schema handle, only for SCH_ARRAY
+//   "variants"    base array of schema handles, only for SCH_UNION
+//
+// `validate` returns 0 when the value matches and a KIND_ERROR value
+// otherwise, matching the convention the codecs use. Validation of an object
+// checks every declared field and reports the first failure with its field
+// name. Additional fields are allowed; a schema describes requirements, not a
+// closed shape.
+//
+// Custom validator functions are not part of this module: the previous
+// `custom_schema` accepted a function handle and then ignored it, which made
+// every validation silently pass. There is no function-pointer call ABI in
+// Mire to implement it honestly, so the kind is gone rather than faked.
+
+load ilogical::base
+
+cons SCH_ANY = 0
+cons SCH_TYPE = 1
+cons SCH_OBJECT = 2
+cons SCH_ARRAY = 3
+cons SCH_UNION = 4
+
+// ── Introspection helpers ──────────────────────────────────────
+
+fn kind_of: (schema :i64) :i64 {
+    return base::as_int(base::object_get(schema, "kind"))
+}
+
+fn make_schema: (kind :i64) :i64 {
+    return base::object_set(base::object(), "kind", base::int(kind))
+}
+
+pub fn kind_name: (kind :i64) :str {
+    if kind == SCH_ANY { return "any" }
+    if kind == SCH_TYPE { return "type" }
+    if kind == SCH_OBJECT { return "object" }
+    if kind == SCH_ARRAY { return "array" }
+    if kind == SCH_UNION { return "union" }
+    return "unknown"
+}
+
+pub fn schema_kind: (schema :i64) :i64 {
+    return kind_of(schema)
+}
+
+pub fn schema_type_name: (schema :i64) :str {
+    return kind_name(kind_of(schema))
+}
+
+// The constrained type for a SCH_TYPE schema, or "" for every other kind.
+pub fn type_name: (schema :i64) :str {
+    if kind_of(schema) != SCH_TYPE { return "" }
+    return base::as_string(base::object_get(schema, "type_name"))
+}
+
+// ── Constructors ───────────────────────────────────────────────
+
+pub fn any: () :i64 {
+    return make_schema(SCH_ANY)
+}
+
+pub fn type_schema: (type_name_text :str) :i64 {
+    set schema = make_schema(SCH_TYPE)
+    return base::object_set(schema, "type_name", base::string(type_name_text))
+}
+
+pub fn object_schema: () :i64 {
+    set schema = make_schema(SCH_OBJECT)
+    return base::object_set(schema, "fields", base::object())
+}
+
+pub fn array_schema: (item_schema :i64) :i64 {
+    set schema = make_schema(SCH_ARRAY)
+    return base::object_set(schema, "items", item_schema)
+}
+
+// `variants` is a base array of schema handles, so a union is an ordinary
+// value and survives format round-trips like everything else in ilogical.
+pub fn union_schema: (variants :i64) :i64 {
+    set schema = make_schema(SCH_UNION)
+    return base::object_set(schema, "variants", variants)
+}
+
+// ── Object schema fields ───────────────────────────────────────
+
+pub fn object_field: (schema :i64, name :str, field_schema :i64, required :bool) :i64 {
+    if kind_of(schema) != SCH_OBJECT { return schema }
+    set fields = base::object_get(schema, "fields") :i64 mut
+    if !base::is_object(fields) {
+        set fields = base::object()
+        base::object_set(schema, "fields", fields)
+    }
+    set spec = base::object() :i64 mut
+    set spec = base::object_set(spec, "schema", field_schema)
+    set spec = base::object_set(spec, "required", base::bool(required))
+    set fields = base::object_set(fields, name, spec)
+    base::object_set(schema, "fields", fields)
+    return schema
+}
+
+pub fn object_field_count: (schema :i64) :i64 {
+    return base::object_len(base::object_get(schema, "fields"))
+}
+
+pub fn object_field_required: (schema :i64, name :str) :bool {
+    set fields = base::object_get(schema, "fields")
+    if !base::object_has(fields, name) { return false }
+    return base::as_bool(base::object_get(base::object_get(fields, name), "required"))
+}
+
+// ── Validation ─────────────────────────────────────────────────
+
+pub fn validate: (schema :i64, value :i64) :i64 {
+    set kind = kind_of(schema)
+    if kind == SCH_ANY { return 0 }
+    if kind == SCH_TYPE { return validate_type(schema, value) }
+    if kind == SCH_OBJECT { return validate_object(schema, value) }
+    if kind == SCH_ARRAY { return validate_array(schema, value) }
+    if kind == SCH_UNION { return validate_union(schema, value) }
+    return base::error("unknown schema kind")
+}
+
+fn validate_type: (schema :i64, value :i64) :i64 {
+    set expected = base::as_string(base::object_get(schema, "type_name"))
+    set actual = base::type_name(value)
+    if expected == actual { return 0 }
+    return base::error("type mismatch: expected " + expected + ", got " + actual)
+}
+
+fn validate_object: (schema :i64, value :i64) :i64 {
+    if !base::is_object(value) { return base::error("expected object") }
+    set fields = base::object_get(schema, "fields")
+    set n = base::object_len(fields)
+    set i = 0 :i64 mut
+    while i < n {
+        set name = base::object_key_at(fields, i)
+        set spec = base::object_value_at(fields, i)
+        set required = base::as_bool(base::object_get(spec, "required"))
+        if !base::object_has(value, name) {
+            if required { return base::error("missing required field: " + name) }
+        } else {
+            set err = validate(base::object_get(spec, "schema"), base::object_get(value, name))
+            if err != 0 {
+                return base::error("field " + name + ": " + base::as_string(err))
+            }
+        }
+        set i = i + 1
+    }
+    return 0
+}
+
+fn validate_array: (schema :i64, value :i64) :i64 {
+    if !base::is_array(value) { return base::error("expected array") }
+    set item_schema = base::object_get(schema, "items")
+    set n = base::array_len(value)
+    set i = 0 :i64 mut
+    while i < n {
+        set err = validate(item_schema, base::array_get(value, i))
+        if err != 0 {
+            return base::error("item " + base::to_string(base::int(i)) + ": " + base::as_string(err))
+        }
+        set i = i + 1
+    }
+    return 0
+}
+
+fn validate_union: (schema :i64, value :i64) :i64 {
+    set variants = base::object_get(schema, "variants")
+    set n = base::array_len(variants)
+    set i = 0 :i64 mut
+    while i < n {
+        set err = validate(base::array_get(variants, i), value)
+        if err == 0 { return 0 }
+        set i = i + 1
+    }
+    return base::error("no matching variant in union")
+}

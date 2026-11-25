@@ -1,0 +1,81 @@
+// Per-symbol suite: ilogical::web request/response/client.
+//
+// Cases: success (constructors expose every field and setters update the same
+// object), limit (a request with no body, a response with no headers), anomaly
+// (set_header repairs a non-object headers field instead of dropping the new
+// header; body is null until explicitly set).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn web_request_success_fields: () :bool {
+    set u = url::parse("https://example.com/api")
+    set req = web::request_new(web::METHOD_POST(), u) :i64 mut
+    set req = web::request_set_header(req, "Content-Type", "application/json")
+    set req = web::request_set_body(req, base::string("{}"))
+    set ok = true :bool mut
+    if !use! harness::check_i64("web/request/method", web::request_method(req), web::METHOD_POST()) { set ok = false }
+    if !use! harness::check_str("web/request/url", url::path(web::request_url(req)), "/api") { set ok = false }
+    if !use! harness::check_str("web/request/header", web::headers_get(web::request_headers(req), "Content-Type"), "application/json") { set ok = false }
+    if !use! harness::check_str("web/request/body", base::as_string(web::request_body(req)), "{}") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_request_limit_empty_body: () :bool {
+    set req = web::request_new(web::METHOD_GET(), url::parse("http://example.com/")) :i64 mut
+    set ok = true :bool mut
+    if !use! harness::check("web/request/body_null", base::is_null(web::request_body(req))) { set ok = false }
+    if !use! harness::check_i64("web/request/headers_empty", web::headers_count(web::request_headers(req)), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_request_anomaly_repairs_headers: () :bool {
+    set req = web::request_new(web::METHOD_GET(), url::parse("http://example.com/")) :i64 mut
+    set req = web::request_set_headers(req, base::string("not an object"))
+    set req = web::request_set_header(req, "X-Test", "1")
+    set ok = use! harness::check_str("web/request/repairs_headers", web::headers_get(web::request_headers(req), "X-Test"), "1")
+    use! harness::anomaly("web", "request/repair_headers", "string headers", "object with X-Test", web::headers_get(web::request_headers(req), "X-Test"), ok)
+    return ok
+}
+
+@[test]
+pub fn web_response_success_fields: () :bool {
+    set resp = web::response_new(200) :i64 mut
+    set resp = web::response_set_header(resp, "Content-Length", "2")
+    set resp = web::response_set_body(resp, base::string("ok"))
+    set ok = true :bool mut
+    if !use! harness::check_i64("web/response/status", web::response_status(resp), 200) { set ok = false }
+    if !use! harness::check_str("web/response/header", web::headers_get(web::response_headers(resp), "Content-Length"), "2") { set ok = false }
+    if !use! harness::check_str("web/response/body", base::as_string(web::response_body(resp)), "ok") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_response_limit_no_body: () :bool {
+    set resp = web::response_new(204) :i64 mut
+    set ok = true :bool mut
+    if !use! harness::check("web/response/body_null", base::is_null(web::response_body(resp))) { set ok = false }
+    if !use! harness::check_i64("web/response/headers_empty", web::headers_count(web::response_headers(resp)), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_client_success_config: () :bool {
+    set client = web::client_new("https://example.com/api/") :i64 mut
+    set client = web::client_set_timeout(client, 1500)
+    set client = web::client_set_default_header(client, "Accept", "application/json")
+    set ok = true :bool mut
+    if !use! harness::check_str("web/client/base_path", url::path(web::client_base_url(client)), "/api/") { set ok = false }
+    if !use! harness::check_i64("web/client/timeout", web::client_timeout(client), 1500) { set ok = false }
+    if !use! harness::check_str("web/client/default_header", web::headers_get(base::object_get(client, "default_headers"), "Accept"), "application/json") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_client_limit_default_timeout: () :bool {
+    return use! harness::check_i64("web/client/default_timeout", web::client_timeout(web::client_new("http://example.com")), 30000)
+}

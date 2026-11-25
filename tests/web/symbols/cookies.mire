@@ -1,0 +1,87 @@
+// Per-symbol suite: ilogical::web cookies.
+//
+// Cases: success (parse every Set-Cookie attribute and serialize it back),
+// limit (an empty cookie value and no attributes), anomaly (only the first '='
+// splits name/value, so a token may contain '='; a cookie without '=' becomes
+// a name with an empty value instead of an error).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn web_cookie_success_new: () :bool {
+    set cookie = web::cookie_new("session", "abc")
+    set ok = true :bool mut
+    if !use! harness::check_str("web/cookie/name", web::cookie_name(cookie), "session") { set ok = false }
+    if !use! harness::check_str("web/cookie/value", web::cookie_value(cookie), "abc") { set ok = false }
+    if !use! harness::check_str("web/cookie/serialize", web::cookie_serialize(cookie), "session=abc") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_cookie_success_parse_attributes: () :bool {
+    set cookie = web::cookie_parse("session=abc; Path=/; Domain=example.com; Max-Age=3600; Secure; HttpOnly")
+    set ok = true :bool mut
+    if !use! harness::check_str("web/cookie/parse_name", web::cookie_name(cookie), "session") { set ok = false }
+    if !use! harness::check_str("web/cookie/parse_value", web::cookie_value(cookie), "abc") { set ok = false }
+    if !use! harness::check_str("web/cookie/parse_path", base::as_string(base::object_get(cookie, "path")), "/") { set ok = false }
+    if !use! harness::check_str("web/cookie/parse_domain", base::as_string(base::object_get(cookie, "domain")), "example.com") { set ok = false }
+    if !use! harness::check_i64("web/cookie/parse_max_age", base::as_int(base::object_get(cookie, "expires")), 3600) { set ok = false }
+    if !use! harness::check("web/cookie/parse_secure", base::as_bool(base::object_get(cookie, "secure"))) { set ok = false }
+    if !use! harness::check("web/cookie/parse_http_only", base::as_bool(base::object_get(cookie, "http_only"))) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_cookie_success_serialize_order: () :bool {
+    set cookie = web::cookie_new("id", "42") mut
+    set cookie = base::object_set(cookie, "domain", base::string("example.com"))
+    set cookie = base::object_set(cookie, "path", base::string("/"))
+    set cookie = base::object_set(cookie, "expires", base::int(60))
+    set cookie = base::object_set(cookie, "secure", base::bool(true))
+    return use! harness::check_str("web/cookie/serialize_order", web::cookie_serialize(cookie), "id=42; Domain=example.com; Path=/; Max-Age=60; Secure")
+}
+
+@[test]
+pub fn web_cookie_limit_empty_value: () :bool {
+    set cookie = web::cookie_new("flag", "")
+    set ok = true :bool mut
+    if !use! harness::check_str("web/cookie/empty_value", web::cookie_value(cookie), "") { set ok = false }
+    if !use! harness::check_str("web/cookie/empty_serialize", web::cookie_serialize(cookie), "flag=") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_cookie_anomaly_first_equals: () :bool {
+    set cookie = web::cookie_parse("token=a=b")
+    set malformed = web::cookie_parse("flag")
+    set ok = true :bool mut
+    if !use! harness::check_str("web/cookie/equals_value", web::cookie_value(cookie), "a=b") { set ok = false }
+    if !use! harness::check_str("web/cookie/no_equals_name", web::cookie_name(malformed), "flag") { set ok = false }
+    if !use! harness::check_str("web/cookie/no_equals_value", web::cookie_value(malformed), "") { set ok = false }
+    use! harness::anomaly("web", "cookies/value_with_equals", "token=a=b", "a=b", web::cookie_value(cookie), web::cookie_value(cookie) == "a=b")
+    return ok
+}
+
+@[test]
+pub fn web_cookie_success_expires_text: () :bool {
+    set cookie = web::cookie_parse("id=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT")
+    set ok = true :bool mut
+    if !use! harness::check_str("web/cookie/expires_text", base::as_string(base::object_get(cookie, "expires_text")), "Wed, 21 Oct 2026 07:28:00 GMT") { set ok = false }
+    if !use! harness::check_str("web/cookie/expires_roundtrip", web::cookie_serialize(cookie), "id=1; Expires=Wed, 21 Oct 2026 07:28:00 GMT") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_cookie_success_jar: () :bool {
+    set jar = web::cookie_jar_new() mut
+    set jar = web::cookie_jar_add(jar, web::cookie_new("a", "1"))
+    set jar = web::cookie_jar_add(jar, web::cookie_new("b", "2"))
+    set ok = true :bool mut
+    if !use! harness::check_str("web/cookie_jar/get", web::cookie_value(web::cookie_jar_get(jar, "a")), "1") { set ok = false }
+    if !use! harness::check_i64("web/cookie_jar/len", base::object_len(jar), 2) { set ok = false }
+    set jar = web::cookie_jar_remove(jar, "a")
+    if !use! harness::check("web/cookie_jar/remove", base::is_null(web::cookie_jar_get(jar, "a"))) { set ok = false }
+    return ok
+}

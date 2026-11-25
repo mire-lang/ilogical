@@ -1,0 +1,445 @@
+module url
+
+// ilogical::url — URL parsing, building, query strings, and resolution.
+//
+// A URL is a base::Value object, not a raw record, so it is the same value
+// type every other ilogical module passes around and `base::is_object` can be
+// used to validate a handle. The keys are:
+//
+//   "scheme"   string
+//   "host"     string (IPv6 without brackets)
+//   "port"     int (0 when absent)
+//   "path"     string
+//   "query"    object of string values
+//   "fragment" string
+//
+// Query keys and values are percent-decoded on parse and percent-encoded on
+// serialization. A repeated query key keeps the last occurrence, which is the
+// common "object, not multimap" expectation.
+
+load ilogical::base
+load ilogical::encoding
+load mire::bytes
+load mire::str
+load mire::vec
+load mire::aux::pal
+
+// ── Low-level helpers ───────────────────────────────────────────
+
+fn slen: (s :&str) :i64 {
+    return bytes::str_len(s)
+}
+
+fn schar: (s :&str, i :i64) :i64 {
+    return bytes::get_str_u8(s, i)
+}
+
+fn find_char: (s :&str, ch :i64, start :i64) :i64 {
+    set n = slen(s)
+    set i = start :i64 mut
+    while i < n {
+        if schar(s, i) == ch { return i }
+        set i = i + 1
+    }
+    return -1
+}
+
+fn last_char: (s :&str, ch :i64) :i64 {
+    set i = slen(s) - 1 :i64 mut
+    while i >= 0 {
+        if schar(s, i) == ch { return i }
+        set i = i - 1
+    }
+    return -1
+}
+
+fn is_alpha: (c :i64) :bool {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+}
+
+fn is_scheme_char: (c :i64) :bool {
+    if is_alpha(c) { return true }
+    if c >= 48 && c <= 57 { return true }
+    return c == 43 || c == 45 || c == 46
+}
+
+fn scheme_valid: (s :&str, colon :i64) :bool {
+    if colon <= 0 { return false }
+    if !is_alpha(schar(s, 0)) { return false }
+    set i = 1 :i64 mut
+    while i < colon {
+        if !is_scheme_char(schar(s, i)) { return false }
+        set i = i + 1
+    }
+    return true
+}
+
+// True when `s` starts with a syntactically valid scheme. Used by resolution
+// to tell an absolute reference from a relative one before parsing it.
+fn has_scheme: (s :&str) :bool {
+    set n = slen(s)
+    set i = 0 :i64 mut
+    while i < n {
+        set c = schar(s, i)
+        if c == 58 { return scheme_valid(s, i) }
+        if c == 47 || c == 63 || c == 35 { return false }
+        set i = i + 1
+    }
+    return false
+}
+
+fn parse_port: (s :&str) :i64 {
+    if slen(s) == 0 { return 0 }
+    set port = str::to::i64(s)
+    if port < 0 || port > 65535 { return 0 }
+    return port
+}
+
+// ── Field access ────────────────────────────────────────────────
+
+fn field_str: (u :i64, key :str) :str {
+    return base::as_string(base::object_get(u, key))
+}
+
+fn field_int: (u :i64, key :str) :i64 {
+    return base::as_int(base::object_get(u, key))
+}
+
+fn set_str: (u :i64, key :str, value :str) :i64 {
+    return base::object_set(u, key, base::string(value))
+}
+
+// ── Constructors ────────────────────────────────────────────────
+
+pub fn build: () :i64 {
+    set u = base::object() :i64 mut
+    set u = set_str(u, "scheme", "")
+    set u = set_str(u, "host", "")
+    set u = base::object_set(u, "port", base::int(0))
+    set u = set_str(u, "path", "")
+    set u = base::object_set(u, "query", base::object())
+    set u = set_str(u, "fragment", "")
+    return u
+}
+
+// ── Parsing ─────────────────────────────────────────────────────
+
+pub fn parse: (s :str) :i64 {
+    set u = build() :i64 mut
+    set n = slen(s)
+    set rest = 0 :i64 mut
+
+    // Scheme: a colon before any '/', '?' or '#'.
+    set colon = -1 :i64 mut
+    set i = 0 :i64 mut
+    while i < n {
+        set c = schar(s, i)
+        if c == 58 {
+            set colon = i
+            set i = n
+        } elif c == 47 || c == 63 || c == 35 {
+            set i = n
+        } else {
+            set i = i + 1
+        }
+    }
+    if colon > 0 && scheme_valid(s, colon) {
+        set u = set_str(u, "scheme", str::substr(s, 0, colon))
+        set rest = colon + 1
+    }
+
+    // Authority after "//".
+    if rest + 1 < n && schar(s, rest) == 47 && schar(s, rest + 1) == 47 {
+        set astart = rest + 2
+        set aend = astart :i64 mut
+        set scanning = true :bool mut
+        while aend < n && scanning {
+            set c = schar(s, aend)
+            if c == 47 || c == 63 || c == 35 {
+                set scanning = false
+            } else {
+                set aend = aend + 1
+            }
+        }
+        // `aend` now points at the path, query, fragment or end of input.
+        set authority = str::substr(s, astart, aend - astart)
+        set userinfo_at = last_char(authority, 64)
+        set hostport = authority :str mut
+        if userinfo_at >= 0 {
+            set hostport = str::substr(authority, userinfo_at + 1, slen(authority) - userinfo_at - 1)
+        }
+        set host = hostport :str mut
+        set port = 0 :i64 mut
+        if slen(hostport) > 0 && schar(hostport, 0) == 91 {
+            set close = find_char(hostport, 93, 0)
+            if close > 0 {
+                set host = str::substr(hostport, 1, close - 1)
+                if close + 1 < slen(hostport) && schar(hostport, close + 1) == 58 {
+                    set port = parse_port(str::substr(hostport, close + 2, slen(hostport) - close - 2))
+                }
+            }
+        } else {
+            set c = last_char(hostport, 58)
+            if c >= 0 {
+                set host = str::substr(hostport, 0, c)
+                set port = parse_port(str::substr(hostport, c + 1, slen(hostport) - c - 1))
+            }
+        }
+        set u = set_str(u, "host", host)
+        set u = base::object_set(u, "port", base::int(port))
+        set rest = aend
+    }
+
+    // Path.
+    set pstart = rest
+    set pend = pstart :i64 mut
+    while pend < n {
+        set c = schar(s, pend)
+        if c == 63 || c == 35 { break }
+        set pend = pend + 1
+    }
+    set path = str::substr(s, pstart, pend - pstart)
+    set u = set_str(u, "path", path)
+    set pos = pend :i64 mut
+
+    // Query.
+    if pos < n && schar(s, pos) == 63 {
+        set qstart = pos + 1
+        set qend = qstart :i64 mut
+        while qend < n && schar(s, qend) != 35 {
+            set qend = qend + 1
+        }
+        set u = base::object_set(u, "query", query_parse(str::substr(s, qstart, qend - qstart)))
+        set pos = qend
+    }
+
+    // Fragment.
+    if pos < n && schar(s, pos) == 35 {
+        set u = set_str(u, "fragment", str::substr(s, pos + 1, n - pos - 1))
+    }
+    return u
+}
+
+pub fn parse_with_base: (s :str, base_url :i64) :i64 {
+    if has_scheme(s) { return parse(s) }
+    return resolve(base_url, parse(s))
+}
+
+// ── Setters and getters ─────────────────────────────────────────
+
+pub fn set_scheme: (u :i64, scheme :str) :i64 { return set_str(u, "scheme", scheme) }
+pub fn set_host: (u :i64, host :str) :i64 { return set_str(u, "host", host) }
+pub fn set_port: (u :i64, port :i64) :i64 { return base::object_set(u, "port", base::int(port)) }
+pub fn set_path: (u :i64, path :str) :i64 { return set_str(u, "path", path) }
+pub fn set_query: (u :i64, query :i64) :i64 { return base::object_set(u, "query", query) }
+pub fn set_fragment: (u :i64, fragment :str) :i64 { return set_str(u, "fragment", fragment) }
+
+pub fn scheme: (u :i64) :str { return field_str(u, "scheme") }
+pub fn host: (u :i64) :str { return field_str(u, "host") }
+pub fn port: (u :i64) :i64 { return field_int(u, "port") }
+pub fn path: (u :i64) :str { return field_str(u, "path") }
+pub fn query: (u :i64) :i64 { return base::object_get(u, "query") }
+pub fn fragment: (u :i64) :str { return field_str(u, "fragment") }
+
+// ── Query parameters ────────────────────────────────────────────
+
+fn form_decode: (s :str) :str {
+    return str::replace(encoding::percent_decode(s), "+", " ")
+}
+
+pub fn query_parse: (s :str) :i64 {
+    set params = base::object() :i64 mut
+    set n = slen(s)
+    set start = 0 :i64 mut
+    if n > 0 && schar(s, 0) == 63 { set start = 1 }
+    set pos = start :i64 mut
+    while pos <= n {
+        set amp = find_char(s, 38, pos)
+        set end = n :i64 mut
+        if amp >= 0 { set end = amp }
+        if end > pos {
+            set pair = str::substr(s, pos, end - pos)
+            set eq = find_char(pair, 61, 0)
+            set raw_key = pair :str mut
+            set raw_val = "" :str mut
+            if eq >= 0 {
+                set raw_key = str::substr(pair, 0, eq)
+                set raw_val = str::substr(pair, eq + 1, slen(pair) - eq - 1)
+            }
+            set key = form_decode(raw_key)
+            set value = form_decode(raw_val)
+            set params = base::object_set(params, key, base::string(value))
+        }
+        if amp < 0 {
+            set pos = n + 1
+        } else {
+            set pos = amp + 1
+        }
+    }
+    return params
+}
+
+pub fn query_stringify: (params :i64) :str {
+    set n = base::object_len(params)
+    set out = "" :str mut
+    set i = 0 :i64 mut
+    while i < n {
+        if i > 0 { set out = out + "&" }
+        set key = base::object_key_at(params, i)
+        set value = base::object_value_at(params, i)
+        set text = base::as_string(value) :str mut
+        if !base::is_string(value) { set text = base::to_string(value) }
+        set out = out + encoding::percent_encode(key) + "=" + encoding::percent_encode(text)
+        set i = i + 1
+    }
+    return out
+}
+
+pub fn query_get: (params :i64, key :str) :str {
+    return base::as_string(base::object_get(params, key))
+}
+
+pub fn query_set: (params :i64, key :str, value :str) :i64 {
+    return base::object_set(params, key, base::string(value))
+}
+
+pub fn query_remove: (params :i64, key :str) :i64 {
+    return base::object_remove(params, key)
+}
+
+// ── Serialization ───────────────────────────────────────────────
+
+fn bracket_host: (host :str) :str {
+    if str::contains(host, ":") {
+        return "[" + host + "]"
+    }
+    return host
+}
+
+pub fn to_string: (u :i64) :str {
+    set scheme_text = field_str(u, "scheme")
+    set host_text = field_str(u, "host")
+    set port_number = field_int(u, "port")
+    set path_text = field_str(u, "path")
+    set fragment_text = field_str(u, "fragment")
+    set out = "" :str mut
+    if scheme_text != "" { set out = out + scheme_text + ":" }
+    if host_text != "" {
+        set out = out + "//" + bracket_host(host_text)
+        if port_number > 0 { set out = out + ":" + str::from::i64(port_number) }
+    }
+    if path_text != "" {
+        if host_text != "" && schar(path_text, 0) != 47 { set out = out + "/" }
+        set out = out + path_text
+    }
+    set q = base::object_get(u, "query")
+    if base::is_object(q) && base::object_len(q) > 0 {
+        set out = out + "?" + query_stringify(q)
+    }
+    if fragment_text != "" { set out = out + "#" + fragment_text }
+    return out
+}
+
+// ── Resolution ──────────────────────────────────────────────────
+
+fn strip_fragment: (s :str) :str {
+    set i = find_char(s, 35, 0)
+    if i < 0 { return s }
+    return str::substr(s, 0, i)
+}
+
+fn strip_query: (s :str) :str {
+    set q = find_char(s, 63, 0)
+    set h = find_char(s, 35, 0)
+    set cut = -1 :i64 mut
+    if q >= 0 { set cut = q }
+    if h >= 0 && (cut < 0 || h < cut) { set cut = h }
+    if cut < 0 { return s }
+    return str::substr(s, 0, cut)
+}
+
+// RFC 3986 dot-segment removal for a path. Empty segments from "//" collapse,
+// which is what browsers do after resolution as well.
+fn normalize_path: (p :str) :str {
+    if p == "" { return "" }
+    set absolute = str::starts::with(p, "/")
+    set trailing = str::ends::with(p, "/")
+    set parts = str::split(p, "/")
+    set stack = vec::with::capacity::str(8) mut
+    set i = 0 :i64 mut
+    while i < vec::len(parts) {
+        set seg = vec::get::str(parts, i)
+        if seg == "" || seg == "." {
+            set i = i + 1
+        } elif seg == ".." {
+            if vec::len(stack) > 0 { vec::pop::str(stack) }
+            set i = i + 1
+        } else {
+            set stack = vec::push::str(stack, seg)
+            set i = i + 1
+        }
+    }
+    set joined = str::join(stack, "/")
+    set out = joined :str mut
+    if absolute { set out = "/" + joined }
+    if trailing && out != "/" && !str::ends::with(out, "/") { set out = out + "/" }
+    return out
+}
+
+fn origin_of: (b :i64) :str {
+    set scheme_text = field_str(b, "scheme")
+    set host_text = field_str(b, "host")
+    set port_number = field_int(b, "port")
+    set out = "" :str mut
+    if scheme_text != "" { set out = scheme_text + ":" }
+    if host_text != "" {
+        set out = out + "//" + bracket_host(host_text)
+        if port_number > 0 { set out = out + ":" + str::from::i64(port_number) }
+    }
+    return out
+}
+
+pub fn resolve_str: (base_url :str, relative :str) :str {
+    if relative == "" { return base_url }
+    if has_scheme(relative) { return relative }
+    if str::starts::with(relative, "//") {
+        if has_scheme(base_url) {
+            set scheme_text = str::substr(base_url, 0, find_char(base_url, 58, 0))
+            return scheme_text + ":" + relative
+        }
+        return relative
+    }
+    if str::starts::with(relative, "#") { return strip_fragment(base_url) + relative }
+    if str::starts::with(relative, "?") { return strip_query(base_url) + relative }
+
+    set b = parse(base_url)
+    set origin = origin_of(b)
+    if str::starts::with(relative, "/") {
+        return origin + normalize_path(relative)
+    }
+    set base_path = field_str(b, "path")
+    set dir = "" :str mut
+    if base_path != "" {
+        if str::ends::with(base_path, "/") {
+            set dir = base_path
+        } else {
+            set slash = last_char(base_path, 47)
+            if slash >= 0 { set dir = str::substr(base_path, 0, slash + 1) }
+        }
+    }
+    set merged = normalize_path(dir + relative) :str mut
+    // A host with no base path would otherwise concatenate "example.com" and
+    // "x" into "example.comx". The slash is part of the authority/path
+    // boundary, so add it before serializing.
+    if field_str(b, "host") != "" && merged != "" && schar(merged, 0) != 47 {
+        set merged = "/" + merged
+    }
+    return origin + merged
+}
+
+pub fn resolve: (base_url :i64, relative :i64) :i64 {
+    set base_text = to_string(base_url)
+    set rel_text = to_string(relative)
+    set merged = resolve_str(base_text, rel_text)
+    return parse(merged)
+}

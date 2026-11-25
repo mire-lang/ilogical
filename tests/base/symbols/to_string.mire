@@ -1,0 +1,60 @@
+// Per-symbol suite: ilogical::base to_string.
+//
+// Cases: success (primitives and containers render deterministically), limit
+// (empty containers and the empty string), anomaly (a string containing a
+// comma or brace is not escaped, so to_string is for diagnostics, not JSON;
+// blobs render only their length).
+
+load ilogical
+load mire::bytes
+load! /tests/_support/harness
+
+@[test]
+pub fn to_string_success_primitives: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("base/to_string/null", base::to_string(base::null()), "null") { set ok = false }
+    if !use! harness::check_str("base/to_string/true", base::to_string(base::bool(true)), "true") { set ok = false }
+    if !use! harness::check_str("base/to_string/false", base::to_string(base::bool(false)), "false") { set ok = false }
+    if !use! harness::check_str("base/to_string/int", base::to_string(base::int(42)), "42") { set ok = false }
+    if !use! harness::check_str("base/to_string/negative", base::to_string(base::int(-10)), "-10") { set ok = false }
+    if !use! harness::check_str("base/to_string/string", base::to_string(base::string("hello")), "hello") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn to_string_success_containers: () :bool {
+    set a = base::array() mut
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    set o = base::object() mut
+    set o = base::object_set(o, "a", base::int(1))
+    set o = base::object_set(o, "b", base::string("test"))
+    set ok = true :bool mut
+    if !use! harness::check_str("base/to_string/array", base::to_string(a), "[1, 2]") { set ok = false }
+    if !use! harness::check_str("base/to_string/object", base::to_string(o), "{a: 1, b: test}") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn to_string_limit_empty: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("base/to_string/empty_array", base::to_string(base::array()), "[]") { set ok = false }
+    if !use! harness::check_str("base/to_string/empty_object", base::to_string(base::object()), "{}") { set ok = false }
+    if !use! harness::check_str("base/to_string/empty_string", base::to_string(base::string("")), "") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn to_string_anomaly_unescaped_commas: () :bool {
+    set s = base::to_string(base::string("a, b"))
+    set ok = use! harness::check_str("base/to_string/unescaped", s, "a, b")
+    use! harness::anomaly("base", "to_string/unescaped_comma", "\"a, b\"", "a, b", s, s == "a, b")
+    return ok
+}
+
+@[test]
+pub fn to_string_success_blob: () :bool {
+    set buf = bytes::alloc(4)
+    set b = base::blob(buf, 4)
+    return use! harness::check_str("base/to_string/blob", base::to_string(b), "<4 bytes>")
+}

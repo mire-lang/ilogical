@@ -1,0 +1,89 @@
+// Per-symbol suite: ilogical::format binary codec.
+//
+// Cases: success (round-trip of every kind, nested containers), limit (empty
+// containers, zero-length blob), anomaly (truncated input and an unknown tag
+// return KIND_ERROR at a byte offset; bin_encode_to_ptr hands raw bytes to a
+// caller).
+
+load ilogical
+load mire::bytes
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn bin_success_scalars: () :bool {
+    set ok = true :bool mut
+    set values = base::array() mut
+    set values = base::array_push(values, base::null())
+    set values = base::array_push(values, base::bool(true))
+    set values = base::array_push(values, base::int(-42))
+    set values = base::array_push(values, base::float(2.5 :f64))
+    set values = base::array_push(values, base::string("hello"))
+    set i = 0 :i64 mut
+    while i < base::array_len(values) {
+        set original = base::array_get(values, i)
+        set encoded = format::bin_encode(original)
+        set decoded = format::bin_decode(base::as_bytes_ptr(encoded), base::as_bytes_len(encoded))
+        if !use! harness::check("format/bin/scalar_roundtrip", base::equals(original, decoded)) { set ok = false }
+        set i = i + 1
+    }
+    return ok
+}
+
+@[test]
+pub fn bin_success_nested: () :bool {
+    set inner = base::array() mut
+    set inner = base::array_push(inner, base::int(1))
+    set inner = base::array_push(inner, base::string("x"))
+    set o = base::object() mut
+    set o = base::object_set(o, "items", inner)
+    set o = base::object_set(o, "ok", base::bool(true))
+    set encoded = format::bin_encode(o)
+    set decoded = format::bin_decode(base::as_bytes_ptr(encoded), base::as_bytes_len(encoded))
+    set ok = true :bool mut
+    if !use! harness::check("format/bin/nested_equals", base::equals(o, decoded)) { set ok = false }
+    if !use! harness::check_i64("format/bin/nested_array_len", base::array_len(base::object_get(decoded, "items")), 2) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn bin_limit_empty_containers: () :bool {
+    set ok = true :bool mut
+    set empty_array = format::bin_encode(base::array())
+    set empty_object = format::bin_encode(base::object())
+    set zero = bytes::alloc(0)
+    set empty_blob = format::bin_encode(base::blob(zero, 0))
+    if !use! harness::check_i64("format/bin/empty_array", base::array_len(format::bin_decode(base::as_bytes_ptr(empty_array), base::as_bytes_len(empty_array))), 0) { set ok = false }
+    if !use! harness::check_i64("format/bin/empty_object", base::object_len(format::bin_decode(base::as_bytes_ptr(empty_object), base::as_bytes_len(empty_object))), 0) { set ok = false }
+    if !use! harness::check_i64("format/bin/empty_blob", base::as_bytes_len(format::bin_decode(base::as_bytes_ptr(empty_blob), base::as_bytes_len(empty_blob))), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn bin_success_encode_to_ptr: () :bool {
+    set encoded = format::bin_encode(base::int(42))
+    set ptr = 0 :ptr mut
+    set len = 0 :i64 mut
+    format::bin_encode_to_ptr(base::int(42), &mut ptr, &mut len)
+    set decoded = format::bin_decode(ptr, len)
+    set ok = true :bool mut
+    if !use! harness::check_i64("format/bin/to_ptr_len", len, base::as_bytes_len(encoded)) { set ok = false }
+    if !use! harness::check_i64("format/bin/to_ptr_value", base::as_int(decoded), 42) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn bin_anomaly_truncated_and_unknown_tag: () :bool {
+    set encoded = format::bin_encode(base::string("hello"))
+    set short = base::as_bytes_len(encoded) - 1
+    set truncated = format::bin_decode(base::as_bytes_ptr(encoded), short)
+    set bad = bytes::alloc(1)
+    bytes::set_u8(bad, 0, 255)
+    set unknown = format::bin_decode(bad, 1)
+    set ok = true :bool mut
+    if !use! harness::check("format/bin/truncated/error", base::is_error(truncated)) { set ok = false }
+    if !use! harness::check("format/bin/unknown_tag/error", base::is_error(unknown)) { set ok = false }
+    if !use! harness::check("format/bin/truncated/position", str::contains(base::as_string(truncated), "byte")) { set ok = false }
+    use! harness::anomaly("format", "bin/truncated", "string-1", "error", base::as_string(truncated), base::is_error(truncated))
+    return ok
+}

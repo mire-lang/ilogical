@@ -1,0 +1,57 @@
+// Per-symbol suite: ilogical::url build/get/set.
+//
+// Cases: success (each setter is visible through its getter and survives
+// serialization), limit (a fresh URL serializes to the empty string), anomaly
+// (setting a port above 65535 is still stored as given; the parser, not the
+// setter, is where range checking happens).
+
+load ilogical
+load! /tests/_support/harness
+
+@[test]
+pub fn url_build_success_fields: () :bool {
+    set u = url::build() mut
+    set u = url::set_scheme(u, "https")
+    set u = url::set_host(u, "example.com")
+    set u = url::set_port(u, 443)
+    set u = url::set_path(u, "/api")
+    set u = url::set_fragment(u, "top")
+    set ok = true :bool mut
+    if !use! harness::check_str("url/build/scheme", url::scheme(u), "https") { set ok = false }
+    if !use! harness::check_str("url/build/host", url::host(u), "example.com") { set ok = false }
+    if !use! harness::check_i64("url/build/port", url::port(u), 443) { set ok = false }
+    if !use! harness::check_str("url/build/path", url::path(u), "/api") { set ok = false }
+    if !use! harness::check_str("url/build/fragment", url::fragment(u), "top") { set ok = false }
+    if !use! harness::check_str("url/build/to_string", url::to_string(u), "https://example.com:443/api#top") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_build_success_relative_path_gets_slash: () :bool {
+    set u = url::build() mut
+    set u = url::set_scheme(u, "http")
+    set u = url::set_host(u, "example.com")
+    set u = url::set_path(u, "x")
+    return use! harness::check_str("url/build/path_slash", url::to_string(u), "http://example.com/x")
+}
+
+@[test]
+pub fn url_build_limit_empty: () :bool {
+    set u = url::build()
+    set ok = true :bool mut
+    if !use! harness::check_str("url/build/empty_string", url::to_string(u), "") { set ok = false }
+    if !use! harness::check_i64("url/build/empty_port", url::port(u), 0) { set ok = false }
+    if !use! harness::check_i64("url/build/empty_query_len", base::object_len(url::query(u)), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_build_anomaly_out_of_range_port: () :bool {
+    set u = url::build() mut
+    set u = url::set_host(u, "example.com")
+    set u = url::set_port(u, 70000)
+    set text = url::to_string(u)
+    set ok = use! harness::check_i64("url/build/port_kept", url::port(u), 70000)
+    use! harness::anomaly("url", "build/out_of_range_port", "70000", "stored verbatim", text, url::port(u) == 70000)
+    return ok
+}

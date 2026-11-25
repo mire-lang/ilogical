@@ -1,0 +1,94 @@
+// Per-symbol suite: ilogical::format::toml_decode.
+//
+// Cases: success (tables, dotted keys, arrays of tables, inline tables,
+// strings and numbers), limit (empty document becomes an empty object),
+// anomaly (malformed input returns KIND_ERROR with a position, and a lone
+// scalar is not a TOML document).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn toml_decode_success_table: () :bool {
+    set doc = format::toml_decode("title = \"hi\"\nport = 8080\ndebug = false\n")
+    set ok = true :bool mut
+    if !use! harness::check_str("format/toml_decode/string", base::as_string(base::object_get(doc, "title")), "hi") { set ok = false }
+    if !use! harness::check_i64("format/toml_decode/int", base::as_int(base::object_get(doc, "port")), 8080) { set ok = false }
+    if !use! harness::check_false("format/toml_decode/bool", base::as_bool(base::object_get(doc, "debug"))) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn toml_decode_success_nested_and_dotted: () :bool {
+    set doc = format::toml_decode("[server]\nport = 8080\n\n[server.tls]\nenabled = true\n")
+    set server = base::object_get(doc, "server")
+    set tls = base::object_get(server, "tls")
+    set ok = true :bool mut
+    if !use! harness::check_i64("format/toml_decode/nested_int", base::as_int(base::object_get(server, "port")), 8080) { set ok = false }
+    if !use! harness::check("format/toml_decode/nested_bool", base::as_bool(base::object_get(tls, "enabled"))) { set ok = false }
+    set dotted = format::toml_decode("a.b.c = 1\n")
+    set ab = base::object_get(dotted, "a")
+    set abc = base::object_get(ab, "b")
+    if !use! harness::check_i64("format/toml_decode/dotted", base::as_int(base::object_get(abc, "c")), 1) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn toml_decode_success_array_of_tables: () :bool {
+    set doc = format::toml_decode("[[items]]\nname = \"a\"\n\n[[items]]\nname = \"b\"\n")
+    set items = base::object_get(doc, "items")
+    set ok = true :bool mut
+    if !use! harness::check_i64("format/toml_decode/aot_len", base::array_len(items), 2) { set ok = false }
+    if !use! harness::check_str("format/toml_decode/aot_first", base::as_string(base::object_get(base::array_get(items, 0), "name")), "a") { set ok = false }
+    if !use! harness::check_str("format/toml_decode/aot_second", base::as_string(base::object_get(base::array_get(items, 1), "name")), "b") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn toml_decode_success_numbers_and_inline_table: () :bool {
+    set doc = format::toml_decode("hex = 0x10\noct = 0o10\nbin = 0b10\nfloat = 1.5\ninf = inf\nnan = nan\nt = { a = 1, b = \"x\" }\n")
+    set t = base::object_get(doc, "t")
+    set ok = true :bool mut
+    if !use! harness::check_i64("format/toml_decode/hex", base::as_int(base::object_get(doc, "hex")), 16) { set ok = false }
+    if !use! harness::check_i64("format/toml_decode/oct", base::as_int(base::object_get(doc, "oct")), 8) { set ok = false }
+    if !use! harness::check_i64("format/toml_decode/bin", base::as_int(base::object_get(doc, "bin")), 2) { set ok = false }
+    if !use! harness::check_f64("format/toml_decode/float", base::as_float(base::object_get(doc, "float")), 1.5) { set ok = false }
+    if !use! harness::check("format/toml_decode/inf", base::as_float(base::object_get(doc, "inf")) > 1.0e300) { set ok = false }
+    if !use! harness::check_i64("format/toml_decode/inline_int", base::as_int(base::object_get(t, "a")), 1) { set ok = false }
+    if !use! harness::check_str("format/toml_decode/inline_string", base::as_string(base::object_get(t, "b")), "x") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn toml_decode_success_multiline_strings: () :bool {
+    set basic = format::toml_decode("s = \"\"\"\nline1\nline2\"\"\"\n")
+    set literal = format::toml_decode("s = '''\nraw\\nvalue'''\n")
+    set ok = true :bool mut
+    if !use! harness::check("format/toml_decode/multiline_basic", str::contains(base::as_string(base::object_get(basic, "s")), "line1\nline2")) { set ok = false }
+    if !use! harness::check("format/toml_decode/multiline_literal", str::contains(base::as_string(base::object_get(literal, "s")), "raw\\nvalue")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn toml_decode_success_dates_are_strings: () :bool {
+    set doc = format::toml_decode("d = 1979-05-27T07:32:00Z\n")
+    return use! harness::check_str("format/toml_decode/date", base::as_string(base::object_get(doc, "d")), "1979-05-27T07:32:00Z")
+}
+
+@[test]
+pub fn toml_decode_limit_empty: () :bool {
+    return use! harness::check_i64("format/toml_decode/empty", base::object_len(format::toml_decode("")), 0)
+}
+
+@[test]
+pub fn toml_decode_anomaly_malformed: () :bool {
+    set missing = format::toml_decode("key = \n")
+    set scalar = format::toml_decode("42\n")
+    set ok = true :bool mut
+    if !use! harness::check("format/toml_decode/missing_value/error", base::is_error(missing)) { set ok = false }
+    if !use! harness::check("format/toml_decode/scalar/error", base::is_error(scalar)) { set ok = false }
+    if !use! harness::check("format/toml_decode/missing_value/position", str::contains(base::as_string(missing), "line 1")) { set ok = false }
+    use! harness::anomaly("format", "toml_decode/bare_scalar", "42", "error", base::as_string(scalar), base::is_error(scalar))
+    return ok
+}

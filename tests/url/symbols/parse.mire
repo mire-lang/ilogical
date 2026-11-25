@@ -1,0 +1,74 @@
+// Per-symbol suite: ilogical::url::parse.
+//
+// Cases: success (absolute URLs with port/query/fragment/userinfo/IPv6),
+// limit (empty and scheme-only inputs), anomaly (a colon inside the path is
+// not a scheme, and an invalid port is reported as 0 rather than wrapping).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn url_parse_success_absolute: () :bool {
+    set u = url::parse("https://example.com:8080/path?a=1&b=hello%20world#sec")
+    set ok = true :bool mut
+    if !use! harness::check("url/parse/is_object", base::is_object(u)) { set ok = false }
+    if !use! harness::check_str("url/parse/scheme", url::scheme(u), "https") { set ok = false }
+    if !use! harness::check_str("url/parse/host", url::host(u), "example.com") { set ok = false }
+    if !use! harness::check_i64("url/parse/port", url::port(u), 8080) { set ok = false }
+    if !use! harness::check_str("url/parse/path", url::path(u), "/path") { set ok = false }
+    if !use! harness::check_str("url/parse/query_a", url::query_get(url::query(u), "a"), "1") { set ok = false }
+    if !use! harness::check_str("url/parse/query_b", url::query_get(url::query(u), "b"), "hello world") { set ok = false }
+    if !use! harness::check_str("url/parse/fragment", url::fragment(u), "sec") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_parse_success_userinfo_and_ipv6: () :bool {
+    set user = url::parse("http://user:pass@example.com/x")
+    set ipv6 = url::parse("http://[::1]:8080/x")
+    set ok = true :bool mut
+    if !use! harness::check_str("url/parse/userinfo_host", url::host(user), "example.com") { set ok = false }
+    if !use! harness::check_str("url/parse/ipv6_host", url::host(ipv6), "::1") { set ok = false }
+    if !use! harness::check_i64("url/parse/ipv6_port", url::port(ipv6), 8080) { set ok = false }
+    if !use! harness::check_str("url/parse/ipv6_roundtrip", url::to_string(ipv6), "http://[::1]:8080/x") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_parse_success_opaque_and_relative: () :bool {
+    set mail = url::parse("mailto:user@example.com")
+    set rel = url::parse("path/to/file?x=1")
+    set ok = true :bool mut
+    if !use! harness::check_str("url/parse/mailto_scheme", url::scheme(mail), "mailto") { set ok = false }
+    if !use! harness::check_str("url/parse/mailto_path", url::path(mail), "user@example.com") { set ok = false }
+    if !use! harness::check_str("url/parse/relative_path", url::path(rel), "path/to/file") { set ok = false }
+    if !use! harness::check_str("url/parse/relative_query", url::query_get(url::query(rel), "x"), "1") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_parse_limit_empty_and_scheme_only: () :bool {
+    set empty = url::parse("")
+    set scheme_only = url::parse("https:")
+    set ok = true :bool mut
+    if !use! harness::check_str("url/parse/empty_scheme", url::scheme(empty), "") { set ok = false }
+    if !use! harness::check_str("url/parse/empty_host", url::host(empty), "") { set ok = false }
+    if !use! harness::check_str("url/parse/scheme_only", url::scheme(scheme_only), "https") { set ok = false }
+    if !use! harness::check_str("url/parse/scheme_only_path", url::path(scheme_only), "") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_parse_anomaly_colon_and_port: () :bool {
+    set path_colon = url::parse("/a:b/c")
+    set bad_port = url::parse("http://example.com:notaport/x")
+    set big_port = url::parse("http://example.com:70000/x")
+    set ok = true :bool mut
+    if !use! harness::check_str("url/parse/path_colon/scheme", url::scheme(path_colon), "") { set ok = false }
+    if !use! harness::check_str("url/parse/path_colon/path", url::path(path_colon), "/a:b/c") { set ok = false }
+    if !use! harness::check_i64("url/parse/bad_port", url::port(bad_port), 0) { set ok = false }
+    if !use! harness::check_i64("url/parse/big_port", url::port(big_port), 0) { set ok = false }
+    use! harness::anomaly("url", "parse/bad_port", "notaport", "0", str::from::i64(url::port(bad_port)), url::port(bad_port) == 0)
+    return ok
+}

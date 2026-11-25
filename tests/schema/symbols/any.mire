@@ -1,0 +1,49 @@
+// Per-symbol suite: ilogical::schema any.
+//
+// Cases: success (an `any` schema accepts every value kind), limit (the empty
+// string is a value like any other), anomaly (an error value is also accepted;
+// `any` makes no representability claim, so a value that no codec can encode
+// still validates).
+
+load ilogical
+load mire::bytes
+load! /tests/_support/harness
+
+@[test]
+pub fn schema_any_success_accepts_every_kind: () :bool {
+    set s = schema::any()
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/any/null", schema::validate(s, base::null()), 0) { set ok = false }
+    if !use! harness::check_i64("schema/any/bool", schema::validate(s, base::bool(true)), 0) { set ok = false }
+    if !use! harness::check_i64("schema/any/int", schema::validate(s, base::int(42)), 0) { set ok = false }
+    if !use! harness::check_i64("schema/any/float", schema::validate(s, base::float(1.5 :f64)), 0) { set ok = false }
+    if !use! harness::check_i64("schema/any/string", schema::validate(s, base::string("x")), 0) { set ok = false }
+    if !use! harness::check_i64("schema/any/array", schema::validate(s, base::array()), 0) { set ok = false }
+    if !use! harness::check_i64("schema/any/object", schema::validate(s, base::object()), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_any_success_introspection: () :bool {
+    set s = schema::any()
+    set ok = true :bool mut
+    if !use! harness::check_str("schema/any/schema_type_name", schema::schema_type_name(s), "any") { set ok = false }
+    if !use! harness::check_i64("schema/any/schema_kind", schema::schema_kind(s), 0) { set ok = false }
+    if !use! harness::check_str("schema/any/type_name_empty", schema::type_name(s), "") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_any_limit_empty_string: () :bool {
+    return use! harness::check_i64("schema/any/empty_string", schema::validate(schema::any(), base::string("")), 0)
+}
+
+@[test]
+pub fn schema_any_anomaly_accepts_error_and_bytes: () :bool {
+    set zero = bytes::alloc(1)
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/any/error", schema::validate(schema::any(), base::error("boom")), 0) { set ok = false }
+    if !use! harness::check_i64("schema/any/bytes", schema::validate(schema::any(), base::blob(zero, 1)), 0) { set ok = false }
+    use! harness::anomaly("schema", "any/accepts_error", "error(boom)", "0", str::from::i64(schema::validate(schema::any(), base::error("boom"))), schema::validate(schema::any(), base::error("boom")) == 0)
+    return ok
+}

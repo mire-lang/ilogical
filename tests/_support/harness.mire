@@ -1,0 +1,187 @@
+// Shared helpers for the per-symbol suites.
+//
+// Tests load this module with a project-root `load!`:
+//
+//     load ilogical
+//     load! /tests/_support/harness
+//
+// and call it through `use!`:
+//
+//     if !use! harness::check("base/string/empty", base::as_string(base::string("")) == "") { ... }
+//
+// The harness depends on Mire only: ilogical is a data library and its tests
+// must not pull in kioto just to print an assertion failure or append an
+// anomaly line.
+
+module harness
+
+load mire::bytes
+load mire::str
+load mire::vec
+load mire::aux::pal
+
+extern fn rt_fs_read_bytes: (path :&str) :str lib "pal"
+extern fn rt_pal_root_open: (path :&str) :i64 lib "pal"
+extern fn rt_pal_root_close: (root :i64) lib "pal"
+extern fn rt_pal_file_open: (root :i64, path :&str, flags :i32) :i64 lib "pal"
+extern fn rt_pal_file_write: (file :i64, data :&str, length :i64) :i64 lib "pal"
+extern fn rt_pal_file_close: (file :i64) lib "pal"
+extern fn pal_fs_mkdir: (path :&str) :bool lib "pal"
+
+// ── assertions ────────────────────────────────────────────────────
+// `check` prints a [FAIL] line, which the runner scans for, and returns the
+// condition so a test can fold it into its own result. The name is the
+// contract: it names the symbol and the case, not the test function.
+
+pub fn check: (name :&str, condition :bool) :bool {
+    if condition {
+        return true
+    }
+    use dasu(str::concat("[FAIL] ", name))
+    return false
+}
+
+pub fn check_false: (name :&str, condition :bool) :bool {
+    if !condition {
+        return true
+    }
+    use dasu(str::concat("[FAIL] ", name))
+    use dasu("  expected: false")
+    return false
+}
+
+pub fn check_i64: (name :&str, actual :i64, expected :i64) :bool {
+    if actual == expected {
+        return true
+    }
+    use dasu(str::concat("[FAIL] ", name))
+    use dasu(str::concat("  expected: ", str::from::i64(expected)))
+    use dasu(str::concat("  actual:   ", str::from::i64(actual)))
+    return false
+}
+
+pub fn check_str: (name :&str, actual :&str, expected :&str) :bool {
+    if actual == expected {
+        return true
+    }
+    use dasu(str::concat("[FAIL] ", name))
+    use dasu(str::concat("  expected: ", expected))
+    use dasu(str::concat("  actual:   ", actual))
+    return false
+}
+
+pub fn check_f64: (name :&str, actual :f64, expected :f64) :bool {
+    if actual == expected {
+        return true
+    }
+    use dasu(str::concat("[FAIL] ", name))
+    use dasu(str::concat("  expected: ", str::from::f64(expected)))
+    use dasu(str::concat("  actual:   ", str::from::f64(actual)))
+    return false
+}
+
+pub fn check_between: (name :&str, actual :i64, low :i64, high :i64) :bool {
+    if actual >= low {
+        if actual <= high {
+            return true
+        }
+    }
+    use dasu(str::concat("[FAIL] ", name))
+    use dasu(str::concat("  expected between: ", str::from::i64(low)))
+    use dasu(str::concat("  and:              ", str::from::i64(high)))
+    use dasu(str::concat("  actual:           ", str::from::i64(actual)))
+    return false
+}
+
+pub fn fail: (name :&str) :bool {
+    use dasu(str::concat("[FAIL] ", name))
+    return false
+}
+
+// ── isolated fixtures ─────────────────────────────────────────────
+// These suites encode and decode in memory, so they need no file fixtures.
+// Keeping the helper out until a test actually writes a file avoids shipping
+// cleanup code that nobody exercises.
+
+// ── anomaly log ───────────────────────────────────────────────────
+// One line per anomalous case, in a stable key=value format:
+//
+//   suite=base/string case=embedded_nul input="..." expected=... got=... ok=false
+//
+// The file lives next to the suite under logs/, which is gitignored except for
+// the .gitkeep that keeps the directory in the tree.
+
+pub fn anomaly: (suite :&str, case :&str, input :&str, expected :&str, got :&str, ok :bool) {
+    set line = str::concat("suite=", suite) :str mut
+    set line = str::concat(line, " case=")
+    set line = str::concat(line, case)
+    set line = str::concat(line, " input=")
+    set line = str::concat(line, quote_field(input))
+    set line = str::concat(line, " expected=")
+    set line = str::concat(line, quote_field(expected))
+    set line = str::concat(line, " got=")
+    set line = str::concat(line, quote_field(got))
+    set line = str::concat(line, " ok=")
+    if ok {
+        set line = str::concat(line, "true")
+    } else {
+        set line = str::concat(line, "false")
+    }
+    set line = str::concat(line, "\n")
+    use append_line(str::concat("tests/", suite), line)
+}
+
+// Quotes a field so a space or an empty value survives a line-oriented parser.
+fn quote_field: (value :&str) :str {
+    set escaped = str::replace(value, "\"", "'")
+    return str::concat(str::concat("\"", escaped), "\"")
+}
+
+// Appends one line by reading the current log and writing it back with the new
+// line. PAL has no public append flag, and one process owns a file for its
+// lifetime because the runner compiles one file per unit.
+fn append_line: (dir :&str, line :&str) {
+    use mkdirs(str::concat(dir, "/logs"))
+    set path = str::concat(dir, "/logs/anomalies.log")
+    set existing = rt_fs_read_bytes(path)
+    set all = str::concat(existing, line)
+    use write_file(path, all)
+}
+
+fn write_file: (path :&str, data :&str) :bool {
+    set root = rt_pal_root_open(".")
+    if root <= 0 { return false }
+    set f = rt_pal_file_open(root, path, 14 :i32)
+    if f <= 0 {
+        use rt_pal_root_close(root)
+        return false
+    }
+    set n = str::len(data)
+    set written = rt_pal_file_write(f, data, n)
+    use rt_pal_file_close(f)
+    use rt_pal_root_close(root)
+    return written == n
+}
+
+// Creates every missing parent of `path`, one level at a time. mkdir returns
+// false both for "already exists" and for "parent missing", so a false result
+// is only accepted when stat-ing the level reports a directory; the PAL bridge
+// exposes that through a successful directory open.
+fn mkdirs: (path :&str) :bool {
+    if str::len(path) == 0 { return false }
+    set parts = str::split(path, "/")
+    set current = "" :str mut
+    set i = 0 :i64 mut
+    while i < vec::len(parts) {
+        set part = vec::get::str(parts, i)
+        if str::len(part) > 0 {
+            if str::len(current) > 0 {
+                set current = str::concat(current, "/")
+            }
+            set current = str::concat(current, part)
+            use pal_fs_mkdir(current)
+        }
+        set i = i + 1
+    }
+    return true
+}

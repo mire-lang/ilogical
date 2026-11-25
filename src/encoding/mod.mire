@@ -1,0 +1,324 @@
+module encoding
+
+// ilogical::encoding — Base64, Hex, and Percent encoding/decoding.
+//
+// Everything here is pure Mire. The decoders return a base::Value of kind
+// bytes (a handle), and the `*_to_ptr` variants hand back raw malloc'd bytes
+// plus their length so a caller can feed them straight into a socket or file.
+// Invalid input is never silently truncated: the handle-returning decoders
+// return a KIND_ERROR value, and the pointer variants report a null pointer
+// with length 0.
+
+load ilogical::base
+load ilogical::buffer
+load mire::bytes
+load mire::aux::pal
+
+// ── Base64 tables ───────────────────────────────────────────────
+
+fn b64_std: (i :i64) :i64 {
+    if i < 26 { return 65 + i }
+    if i < 52 { return 97 + i - 26 }
+    if i < 62 { return 48 + i - 52 }
+    if i == 62 { return 43 }
+    return 47
+}
+
+fn b64_url: (i :i64) :i64 {
+    if i < 26 { return 65 + i }
+    if i < 52 { return 97 + i - 26 }
+    if i < 62 { return 48 + i - 52 }
+    if i == 62 { return 45 }
+    return 95
+}
+
+fn b64_value: (c :i64, url_safe :bool) :i64 {
+    if c >= 65 && c <= 90 { return c - 65 }
+    if c >= 97 && c <= 122 { return c - 97 + 26 }
+    if c >= 48 && c <= 57 { return c - 48 + 52 }
+    if url_safe {
+        if c == 45 { return 62 }
+        if c == 95 { return 63 }
+        return -1
+    }
+    if c == 43 { return 62 }
+    if c == 47 { return 63 }
+    return -1
+}
+
+fn encode_b64: (data :&ptr, len :i64, url_safe :bool) :str {
+    if len <= 0 { return "" }
+    set out = buffer::new((len / 3 + 1) * 4)
+    if out == 0 { return "" }
+    set i = 0 :i64 mut
+    while i < len {
+        set b0 = bytes::get_u8(data, i)
+        set b1 = 0 :i64 mut
+        set b2 = 0 :i64 mut
+        set have1 = false :bool mut
+        set have2 = false :bool mut
+        if i + 1 < len {
+            set b1 = bytes::get_u8(data, i + 1)
+            set have1 = true
+        }
+        if i + 2 < len {
+            set b2 = bytes::get_u8(data, i + 2)
+            set have2 = true
+        }
+        set v = (b0 << 16) + (b1 << 8) + b2
+        set c0 = (v >> 18) & 63
+        set c1 = (v >> 12) & 63
+        set c2 = (v >> 6) & 63
+        set c3 = v & 63
+        if url_safe {
+            buffer::push_u8(out, b64_url(c0))
+            buffer::push_u8(out, b64_url(c1))
+            if have1 { buffer::push_u8(out, b64_url(c2)) } else { buffer::push_u8(out, 61) }
+            if have2 { buffer::push_u8(out, b64_url(c3)) } else { buffer::push_u8(out, 61) }
+        } else {
+            buffer::push_u8(out, b64_std(c0))
+            buffer::push_u8(out, b64_std(c1))
+            if have1 { buffer::push_u8(out, b64_std(c2)) } else { buffer::push_u8(out, 61) }
+            if have2 { buffer::push_u8(out, b64_std(c3)) } else { buffer::push_u8(out, 61) }
+        }
+        set i = i + 3
+    }
+    set text = buffer::to_str(out)
+    buffer::free(out)
+    return text
+}
+
+pub fn base64_encode: (data :&ptr, len :i64) :str {
+    return encode_b64(data, len, false)
+}
+
+pub fn base64_url_encode: (data :&ptr, len :i64) :str {
+    return encode_b64(data, len, true)
+}
+
+// Decode into freshly malloc'd bytes. Returns true and writes through the
+// out-parameters on success; on failure the pointer is null and the length 0.
+fn decode_b64_alloc: (s :str, url_safe :bool, out :&mut ptr, out_len :&mut i64) :bool {
+    set n = bytes::str_len(s)
+    set capacity = (n / 4 + 1) * 3
+    set data = bytes::alloc(capacity)
+    if data == 0 && capacity > 0 {
+        set *out = 0
+        set *out_len = 0
+        return false
+    }
+    set written = 0 :i64 mut
+    set acc = 0 :i64 mut
+    set bits = 0 :i64 mut
+    set i = 0 :i64 mut
+    set stopped = false :bool mut
+    while i < n {
+        set c = bytes::get_str_u8(s, i)
+        if c == 61 {
+            set stopped = true
+            set i = n
+        } elif c == 32 || c == 9 || c == 10 || c == 13 {
+            set i = i + 1
+        } else {
+            set v = b64_value(c, url_safe)
+            if v < 0 {
+                if data != 0 { bytes::free(data) }
+                set *out = 0
+                set *out_len = 0
+                return false
+            }
+            set acc = (acc << 6) | v
+            set bits = bits + 6
+            if bits >= 8 {
+                set bits = bits - 8
+                set byte = (acc >> bits) & 255
+                bytes::set_u8(data, written, byte)
+                set written = written + 1
+            }
+            set i = i + 1
+        }
+    }
+    if stopped {
+        // Nothing else to do: padding marks the end of the encoded data.
+    }
+    set *out = data
+    set *out_len = written
+    return true
+}
+
+pub fn base64_decode_to_ptr: (s :str, out :&mut ptr, out_len :&mut i64) {
+    set ok = decode_b64_alloc(s, false, out, out_len)
+    if !ok { return }
+}
+
+pub fn base64_url_decode_to_ptr: (s :str, out :&mut ptr, out_len :&mut i64) {
+    set ok = decode_b64_alloc(s, true, out, out_len)
+    if !ok { return }
+}
+
+pub fn base64_decode: (s :str) :i64 {
+    set data = 0 :ptr mut
+    set n = 0 :i64 mut
+    set ok = decode_b64_alloc(s, false, &mut data, &mut n)
+    if !ok { return base::error("invalid base64 input") }
+    set out = base::blob(data, n)
+    if data != 0 { bytes::free(data) }
+    return out
+}
+
+pub fn base64_url_decode: (s :str) :i64 {
+    set data = 0 :ptr mut
+    set n = 0 :i64 mut
+    set ok = decode_b64_alloc(s, true, &mut data, &mut n)
+    if !ok { return base::error("invalid base64url input") }
+    set out = base::blob(data, n)
+    if data != 0 { bytes::free(data) }
+    return out
+}
+
+// ── Hex ─────────────────────────────────────────────────────────
+
+fn hex_digit: (c :i64) :i64 {
+    if c >= 48 && c <= 57 { return c - 48 }
+    if c >= 97 && c <= 102 { return c - 87 }
+    if c >= 65 && c <= 70 { return c - 55 }
+    return -1
+}
+
+fn hex_char: (v :i64) :i64 {
+    if v < 10 { return 48 + v }
+    return 97 + v - 10
+}
+
+pub fn hex_encode: (data :&ptr, len :i64) :str {
+    if len <= 0 { return "" }
+    set out = buffer::new(len * 2)
+    if out == 0 { return "" }
+    set i = 0 :i64 mut
+    while i < len {
+        set b = bytes::get_u8(data, i)
+        buffer::push_u8(out, hex_char((b >> 4) & 15))
+        buffer::push_u8(out, hex_char(b & 15))
+        set i = i + 1
+    }
+    set text = buffer::to_str(out)
+    buffer::free(out)
+    return text
+}
+
+fn decode_hex_alloc: (s :str, out :&mut ptr, out_len :&mut i64) :bool {
+    set n = bytes::str_len(s)
+    if n % 2 != 0 {
+        set *out = 0
+        set *out_len = 0
+        return false
+    }
+    set count = n / 2
+    set data = bytes::alloc(count)
+    if data == 0 && count > 0 {
+        set *out = 0
+        set *out_len = 0
+        return false
+    }
+    set i = 0 :i64 mut
+    while i < count {
+        set hi = hex_digit(bytes::get_str_u8(s, i * 2))
+        set lo = hex_digit(bytes::get_str_u8(s, i * 2 + 1))
+        if hi < 0 || lo < 0 {
+            if data != 0 { bytes::free(data) }
+            set *out = 0
+            set *out_len = 0
+            return false
+        }
+        bytes::set_u8(data, i, (hi << 4) | lo)
+        set i = i + 1
+    }
+    set *out = data
+    set *out_len = count
+    return true
+}
+
+pub fn hex_decode_to_ptr: (s :str, out :&mut ptr, out_len :&mut i64) {
+    set ok = decode_hex_alloc(s, out, out_len)
+    if !ok { return }
+}
+
+pub fn hex_decode: (s :str) :i64 {
+    set data = 0 :ptr mut
+    set n = 0 :i64 mut
+    set ok = decode_hex_alloc(s, &mut data, &mut n)
+    if !ok { return base::error("invalid hex input") }
+    set out = base::blob(data, n)
+    if data != 0 { bytes::free(data) }
+    return out
+}
+
+// ── Percent (URL) encoding ──────────────────────────────────────
+//
+// Only RFC 3986 unreserved characters survive: A-Z, a-z, 0-9, '-', '_', '.',
+// '~'. Everything else is emitted as uppercase %XX over its UTF-8 bytes, so
+// the result is safe in a URL and round-trips through percent_decode.
+
+fn is_unreserved: (c :i64) :bool {
+    if c >= 65 && c <= 90 { return true }
+    if c >= 97 && c <= 122 { return true }
+    if c >= 48 && c <= 57 { return true }
+    return c == 45 || c == 95 || c == 46 || c == 126
+}
+
+pub fn percent_encode: (s :str) :str {
+    set n = bytes::str_len(s)
+    if n == 0 { return "" }
+    set out = buffer::new(n)
+    if out == 0 { return "" }
+    set i = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(s, i)
+        if is_unreserved(c) {
+            buffer::push_u8(out, c)
+        } else {
+            buffer::push_u8(out, 37)
+            buffer::push_u8(out, hex_char_upper((c >> 4) & 15))
+            buffer::push_u8(out, hex_char_upper(c & 15))
+        }
+        set i = i + 1
+    }
+    set text = buffer::to_str(out)
+    buffer::free(out)
+    return text
+}
+
+fn hex_char_upper: (v :i64) :i64 {
+    if v < 10 { return 48 + v }
+    return 65 + v - 10
+}
+
+pub fn percent_decode: (s :str) :str {
+    set n = bytes::str_len(s)
+    if n == 0 { return "" }
+    set out = buffer::new(n)
+    if out == 0 { return "" }
+    set i = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(s, i)
+        if c == 37 && i + 2 < n {
+            set hi = hex_digit(bytes::get_str_u8(s, i + 1))
+            set lo = hex_digit(bytes::get_str_u8(s, i + 2))
+            if hi >= 0 && lo >= 0 {
+                buffer::push_u8(out, (hi << 4) | lo)
+                set i = i + 3
+            } else {
+                // A stray '%' is a literal percent sign rather than an error:
+                // form data in the wild contains unescaped ones.
+                buffer::push_u8(out, c)
+                set i = i + 1
+            }
+        } else {
+            buffer::push_u8(out, c)
+            set i = i + 1
+        }
+    }
+    set text = buffer::to_str(out)
+    buffer::free(out)
+    return text
+}

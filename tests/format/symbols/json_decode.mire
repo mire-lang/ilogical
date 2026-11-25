@@ -1,0 +1,80 @@
+// Per-symbol suite: ilogical::format::json_decode.
+//
+// Cases: success (scalars, containers, escapes, numbers), limit (empty
+// containers and whitespace), anomaly (empty input and trailing commas return
+// KIND_ERROR with a line/column message instead of a partial value).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn json_decode_success_scalars: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check("format/json_decode/null", base::is_null(format::json_decode("null"))) { set ok = false }
+    if !use! harness::check("format/json_decode/true", base::as_bool(format::json_decode("true"))) { set ok = false }
+    if !use! harness::check_false("format/json_decode/false", base::as_bool(format::json_decode("false"))) { set ok = false }
+    if !use! harness::check_i64("format/json_decode/int", base::as_int(format::json_decode("42")), 42) { set ok = false }
+    if !use! harness::check_i64("format/json_decode/int_negative", base::as_int(format::json_decode("-7")), -7) { set ok = false }
+    if !use! harness::check_f64("format/json_decode/float", base::as_float(format::json_decode("3.14")), 3.14) { set ok = false }
+    if !use! harness::check_str("format/json_decode/string", base::as_string(format::json_decode("\"hello\"")), "hello") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_decode_success_containers: () :bool {
+    set a = format::json_decode("[1, \"x\", false, null]")
+    set o = format::json_decode("{\"name\": \"test\", \"value\": 42}")
+    set ok = true :bool mut
+    if !use! harness::check_i64("format/json_decode/array_len", base::array_len(a), 4) { set ok = false }
+    if !use! harness::check_i64("format/json_decode/array_int", base::as_int(base::array_get(a, 0)), 1) { set ok = false }
+    if !use! harness::check_str("format/json_decode/array_string", base::as_string(base::array_get(a, 1)), "x") { set ok = false }
+    if !use! harness::check_false("format/json_decode/array_bool", base::as_bool(base::array_get(a, 2))) { set ok = false }
+    if !use! harness::check("format/json_decode/array_null", base::is_null(base::array_get(a, 3))) { set ok = false }
+    if !use! harness::check_i64("format/json_decode/object_len", base::object_len(o), 2) { set ok = false }
+    if !use! harness::check_str("format/json_decode/object_string", base::as_string(base::object_get(o, "name")), "test") { set ok = false }
+    if !use! harness::check_i64("format/json_decode/object_int", base::as_int(base::object_get(o, "value")), 42) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_decode_success_escapes_and_unicode: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("format/json_decode/newline", base::as_string(format::json_decode("\"a\\nb\"")), "a\nb") { set ok = false }
+    if !use! harness::check_str("format/json_decode/quote", base::as_string(format::json_decode("\"a\\\"b\"")), "a\"b") { set ok = false }
+    if !use! harness::check_str("format/json_decode/backslash", base::as_string(format::json_decode("\"a\\\\b\"")), "a\\b") { set ok = false }
+    if !use! harness::check_str("format/json_decode/bmp_escape", base::as_string(format::json_decode("\"\\u00e9\"")), "é") { set ok = false }
+    if !use! harness::check_str("format/json_decode/surrogate_pair", base::as_string(format::json_decode("\"\\ud83d\\ude00\"")), "😀") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_decode_success_numbers: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_f64("format/json_decode/exponent", base::as_float(format::json_decode("1e3")), 1000.0) { set ok = false }
+    if !use! harness::check_f64("format/json_decode/negative_exponent", base::as_float(format::json_decode("2.5e-2")), 0.025) { set ok = false }
+    if !use! harness::check_i64("format/json_decode/big_int", base::as_int(format::json_decode("9223372036854775807")), 9223372036854775807) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_decode_limit_empty_containers: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_i64("format/json_decode/empty_array", base::array_len(format::json_decode("[]")), 0) { set ok = false }
+    if !use! harness::check_i64("format/json_decode/empty_object", base::object_len(format::json_decode("{}")), 0) { set ok = false }
+    if !use! harness::check("format/json_decode/whitespace", base::is_null(format::json_decode("  null  "))) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_decode_anomaly_invalid_input: () :bool {
+    set empty = format::json_decode("")
+    set trailing = format::json_decode("[1,]")
+    set ok = true :bool mut
+    if !use! harness::check("format/json_decode/empty/error", base::is_error(empty)) { set ok = false }
+    if !use! harness::check("format/json_decode/trailing/error", base::is_error(trailing)) { set ok = false }
+    if !use! harness::check("format/json_decode/empty/message", str::contains(base::as_string(empty), "line 1")) { set ok = false }
+    if !use! harness::check("format/json_decode/trailing/message", str::contains(base::as_string(trailing), "column 4")) { set ok = false }
+    use! harness::anomaly("format", "json_decode/trailing_comma", "[1,]", "error", base::as_string(trailing), base::is_error(trailing))
+    return ok
+}

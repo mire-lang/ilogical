@@ -1,0 +1,44 @@
+// Per-symbol suite: ilogical::base accessors and type names.
+//
+// Cases: success (each accessor returns its value), limit (wrong-kind reads
+// return the neutral value), anomaly (type_name on an error says "error", and
+// as_string on an int yields "" rather than reading the int field).
+
+load ilogical
+load mire::bytes
+load! /tests/_support/harness
+
+@[test]
+pub fn accessors_success_values: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check("base/as_bool/true", base::as_bool(base::bool(true))) { set ok = false }
+    if !use! harness::check_false("base/as_bool/false", base::as_bool(base::bool(false))) { set ok = false }
+    if !use! harness::check_i64("base/as_int/positive", base::as_int(base::int(42)), 42) { set ok = false }
+    if !use! harness::check_i64("base/as_int/negative", base::as_int(base::int(-100)), -100) { set ok = false }
+    if !use! harness::check_f64("base/as_float/positive", base::as_float(base::float(3.14 :f64)), 3.14) { set ok = false }
+    if !use! harness::check_f64("base/as_float/negative", base::as_float(base::float(-2.5 :f64)), -2.5) { set ok = false }
+    if !use! harness::check_str("base/as_string/text", base::as_string(base::string("hello")), "hello") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn accessors_limit_wrong_kind: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_false("base/as_bool/wrong_kind", base::as_bool(base::int(1))) { set ok = false }
+    if !use! harness::check_i64("base/as_int/wrong_kind", base::as_int(base::bool(true)), 0) { set ok = false }
+    if !use! harness::check_f64("base/as_float/wrong_kind", base::as_float(base::int(42)), 0.0) { set ok = false }
+    if !use! harness::check_str("base/as_string/wrong_kind", base::as_string(base::int(42)), "") { set ok = false }
+    if !use! harness::check_i64("base/as_bytes/wrong_kind", base::as_bytes_len(base::string("abc")), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn accessors_anomaly_type_names: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("base/type_name/error", base::type_name(base::error("boom")), "error") { set ok = false }
+    set buf = bytes::alloc(1)
+    set blob = base::blob(buf, 1)
+    if !use! harness::check_str("base/type_name/bytes", base::type_name(blob), "bytes") { set ok = false }
+    use! harness::anomaly("base", "accessors/wrong_kind_int_as_string", "int(42)", "\"\"", base::as_string(base::int(42)), base::as_string(base::int(42)) == "")
+    return ok
+}

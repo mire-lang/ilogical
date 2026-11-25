@@ -1,0 +1,86 @@
+// Per-symbol suite: ilogical::format::json_encode.
+//
+// Cases: success (scalars, arrays, objects, escaping), limit (empty
+// containers and the empty string), anomaly (non-finite floats have no JSON
+// representation and become null; blobs become integer arrays because JSON has
+// no byte type).
+
+load ilogical
+load mire::bytes
+load! /tests/_support/harness
+
+@[test]
+pub fn json_encode_success_scalars: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("format/json_encode/null", format::json_encode(base::null()), "null") { set ok = false }
+    if !use! harness::check_str("format/json_encode/true", format::json_encode(base::bool(true)), "true") { set ok = false }
+    if !use! harness::check_str("format/json_encode/false", format::json_encode(base::bool(false)), "false") { set ok = false }
+    if !use! harness::check_str("format/json_encode/int", format::json_encode(base::int(42)), "42") { set ok = false }
+    if !use! harness::check_str("format/json_encode/int_negative", format::json_encode(base::int(-7)), "-7") { set ok = false }
+    if !use! harness::check_str("format/json_encode/float", format::json_encode(base::float(3.14 :f64)), "3.14") { set ok = false }
+    if !use! harness::check_str("format/json_encode/float_integral", format::json_encode(base::float(2.0 :f64)), "2.0") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_encode_success_containers: () :bool {
+    set a = base::array() mut
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::string("x"))
+    set a = base::array_push(a, base::bool(false))
+    set o = base::object() mut
+    set o = base::object_set(o, "name", base::string("test"))
+    set o = base::object_set(o, "value", base::int(42))
+    set ok = true :bool mut
+    if !use! harness::check_str("format/json_encode/array", format::json_encode(a), "[1,\"x\",false]") { set ok = false }
+    if !use! harness::check_str("format/json_encode/object", format::json_encode(o), "{\"name\":\"test\",\"value\":42}") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_encode_success_escapes: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("format/json_encode/newline", format::json_encode(base::string("a\nb")), "\"a\\nb\"") { set ok = false }
+    if !use! harness::check_str("format/json_encode/quote", format::json_encode(base::string("a\"b")), "\"a\\\"b\"") { set ok = false }
+    if !use! harness::check_str("format/json_encode/backslash", format::json_encode(base::string("a\\b")), "\"a\\\\b\"") { set ok = false }
+    set raw = bytes::alloc(3)
+    bytes::set_u8(raw, 0, 97)
+    bytes::set_u8(raw, 1, 1)
+    bytes::set_u8(raw, 2, 98)
+    set control = bytes::to_str(raw, 3)
+    if !use! harness::check_str("format/json_encode/control", format::json_encode(base::string(control)), "\"a\\u0001b\"") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_encode_limit_empty: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("format/json_encode/empty_string", format::json_encode(base::string("")), "\"\"") { set ok = false }
+    if !use! harness::check_str("format/json_encode/empty_array", format::json_encode(base::array()), "[]") { set ok = false }
+    if !use! harness::check_str("format/json_encode/empty_object", format::json_encode(base::object()), "{}") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_encode_anomaly_non_finite: () :bool {
+    set z = 0.0 :f64
+    set inf = format::json_encode(base::float(1.0 / z))
+    set nan = format::json_encode(base::float(z / z))
+    set ok = true :bool mut
+    if !use! harness::check_str("format/json_encode/inf", inf, "null") { set ok = false }
+    if !use! harness::check_str("format/json_encode/nan", nan, "null") { set ok = false }
+    use! harness::anomaly("format", "json_encode/non_finite", "inf nan", "null null", inf, inf == "null")
+    return ok
+}
+
+@[test]
+pub fn json_encode_anomaly_blob_as_array: () :bool {
+    set buf = bytes::alloc(2)
+    bytes::set_u8(buf, 0, 1)
+    bytes::set_u8(buf, 1, 255)
+    set b = base::blob(buf, 2)
+    set text = format::json_encode(b)
+    set ok = use! harness::check_str("format/json_encode/blob", text, "[1,255]")
+    use! harness::anomaly("format", "json_encode/blob", "2 bytes", "[1,255]", text, text == "[1,255]")
+    return ok
+}

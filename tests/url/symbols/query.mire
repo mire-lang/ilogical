@@ -1,0 +1,63 @@
+// Per-symbol suite: ilogical::url query strings.
+//
+// Cases: success (form decoding, plus-as-space, insertion order), limit (empty
+// query and empty values), anomaly (a repeated key keeps the last occurrence,
+// and an empty pair is ignored rather than becoming an empty key).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn url_query_success_parse: () :bool {
+    set params = url::query_parse("a=1&b=hello%20world&c=x+y")
+    set ok = true :bool mut
+    if !use! harness::check_str("url/query/a", url::query_get(params, "a"), "1") { set ok = false }
+    if !use! harness::check_str("url/query/b", url::query_get(params, "b"), "hello world") { set ok = false }
+    if !use! harness::check_str("url/query/c_plus", url::query_get(params, "c"), "x y") { set ok = false }
+    if !use! harness::check_i64("url/query/len", base::object_len(params), 3) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_query_success_set_get_remove_stringify: () :bool {
+    set params = url::query_parse("a=1") mut
+    set params = url::query_set(params, "b", "2")
+    set params = url::query_set(params, "a", "3")
+    set text = url::query_stringify(params)
+    set ok = true :bool mut
+    if !use! harness::check_str("url/query/set_a", url::query_get(params, "a"), "3") { set ok = false }
+    if !use! harness::check_str("url/query/set_b", url::query_get(params, "b"), "2") { set ok = false }
+    if !use! harness::check_str("url/query/stringify_order", text, "a=3&b=2") { set ok = false }
+    set params = url::query_remove(params, "a")
+    if !use! harness::check_false("url/query/remove", base::object_has(params, "a")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_query_success_stringify_encodes: () :bool {
+    set params = url::query_parse("") mut
+    set params = url::query_set(params, "q", "a b&c")
+    return use! harness::check_str("url/query/stringify_escaping", url::query_stringify(params), "q=a%20b%26c")
+}
+
+@[test]
+pub fn url_query_limit_empty: () :bool {
+    set params = url::query_parse("")
+    set ok = true :bool mut
+    if !use! harness::check_i64("url/query/empty_len", base::object_len(params), 0) { set ok = false }
+    if !use! harness::check_str("url/query/empty_stringify", url::query_stringify(params), "") { set ok = false }
+    if !use! harness::check_str("url/query/missing", url::query_get(params, "missing"), "") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_query_anomaly_duplicates_and_empty_pairs: () :bool {
+    set params = url::query_parse("a=1&&a=2&flag")
+    set ok = true :bool mut
+    if !use! harness::check_i64("url/query/duplicate_len", base::object_len(params), 2) { set ok = false }
+    if !use! harness::check_str("url/query/duplicate_last", url::query_get(params, "a"), "2") { set ok = false }
+    if !use! harness::check_str("url/query/flag_empty", url::query_get(params, "flag"), "") { set ok = false }
+    use! harness::anomaly("url", "query/duplicate_key", "a=1&a=2", "2", url::query_get(params, "a"), url::query_get(params, "a") == "2")
+    return ok
+}

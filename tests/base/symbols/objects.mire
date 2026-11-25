@@ -1,0 +1,84 @@
+// Per-symbol suite: ilogical::base objects.
+//
+// Cases: success (set/get/has/key_at/value_at preserve insertion order and
+// overwrite in place), limit (empty object), anomaly (out-of-range key access
+// returns "" and null; a key containing '.' or '[' is still a single literal
+// key because objects are not paths).
+
+load ilogical
+load! /tests/_support/harness
+
+@[test]
+pub fn objects_success_set_get: () :bool {
+    set o = base::object() mut
+    set o = base::object_set(o, "name", base::string("test"))
+    set o = base::object_set(o, "value", base::int(42))
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/object/len", base::object_len(o), 2) { set ok = false }
+    if !use! harness::check_str("base/object/get/string", base::as_string(base::object_get(o, "name")), "test") { set ok = false }
+    if !use! harness::check_i64("base/object/get/int", base::as_int(base::object_get(o, "value")), 42) { set ok = false }
+    if !use! harness::check("base/object/has", base::object_has(o, "name")) { set ok = false }
+    if !use! harness::check_false("base/object/missing", base::object_has(o, "missing")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn objects_success_key_and_value_at: () :bool {
+    set o = base::object() mut
+    set o = base::object_set(o, "a", base::int(1))
+    set o = base::object_set(o, "b", base::int(2))
+    set ok = true :bool mut
+    if !use! harness::check_str("base/object/key_at/0", base::object_key_at(o, 0), "a") { set ok = false }
+    if !use! harness::check_str("base/object/key_at/1", base::object_key_at(o, 1), "b") { set ok = false }
+    if !use! harness::check_i64("base/object/value_at/0", base::as_int(base::object_value_at(o, 0)), 1) { set ok = false }
+    if !use! harness::check_i64("base/object/value_at/1", base::as_int(base::object_value_at(o, 1)), 2) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn objects_success_overwrite: () :bool {
+    set o = base::object() mut
+    set o = base::object_set(o, "key", base::int(1))
+    set o = base::object_set(o, "key", base::int(2))
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/object/overwrite_len", base::object_len(o), 1) { set ok = false }
+    if !use! harness::check_i64("base/object/overwrite_value", base::as_int(base::object_get(o, "key")), 2) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn objects_limit_empty: () :bool {
+    set o = base::object()
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/object/empty_len", base::object_len(o), 0) { set ok = false }
+    if !use! harness::check_str("base/object/empty_key", base::object_key_at(o, 0), "") { set ok = false }
+    if !use! harness::check("base/object/empty_value_null", base::is_null(base::object_value_at(o, 0))) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn objects_anomaly_index_and_literal_keys: () :bool {
+    set o = base::object() mut
+    set o = base::object_set(o, "a.b", base::int(1))
+    set o = base::object_set(o, "a[0]", base::int(2))
+    set ok = true :bool mut
+    if !use! harness::check_str("base/object/key_at/negative", base::object_key_at(o, -1), "") { set ok = false }
+    if !use! harness::check_str("base/object/key_at/past", base::object_key_at(o, 5), "") { set ok = false }
+    if !use! harness::check_i64("base/object/literal_dot", base::as_int(base::object_get(o, "a.b")), 1) { set ok = false }
+    if !use! harness::check_i64("base/object/literal_bracket", base::as_int(base::object_get(o, "a[0]")), 2) { set ok = false }
+    use! harness::anomaly("base", "objects/key_at_out_of_range", "len=2 index=5", "\"\"", base::object_key_at(o, 5), base::object_key_at(o, 5) == "")
+    return ok
+}
+
+@[test]
+pub fn objects_success_nested: () :bool {
+    set inner = base::object() mut
+    set inner = base::object_set(inner, "nested", base::int(42))
+    set outer = base::object() mut
+    set outer = base::object_set(outer, "inner", inner)
+    set retrieved = base::object_get(outer, "inner")
+    set ok = true :bool mut
+    if !use! harness::check("base/object/nested/is_object", base::is_object(retrieved)) { set ok = false }
+    if !use! harness::check_i64("base/object/nested/value", base::as_int(base::object_get(retrieved, "nested")), 42) { set ok = false }
+    return ok
+}

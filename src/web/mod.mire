@@ -1,0 +1,323 @@
+module web
+
+// ilogical::web — HTTP methods, headers, requests, responses, cookies.
+//
+// Requests, responses, clients, and cookies are base::Value objects, matching
+// the rest of ilogical. They are message descriptions, not a transport: this
+// module deliberately stops at building and inspecting them. Sending a
+// request needs sockets, and that belongs to kioto::net rather than to a data
+// library that must stay free of platform I/O.
+//
+// Header names are case-sensitive object keys here. HTTP itself is
+// case-insensitive, so a caller that wants the protocol's behaviour should
+// normalize with a helper of its own; doing it implicitly would make a lookup
+// for "Content-Type" silently miss a header stored as "content-type", which
+// hides bugs instead of fixing them. Duplicate header names keep the last
+// value.
+
+load ilogical::base
+load ilogical::url
+load mire::str
+load mire::vec
+
+// ── HTTP Methods ────────────────────────────────────────────────
+
+cons METHOD_CODE_GET = 0
+cons METHOD_CODE_POST = 1
+cons METHOD_CODE_PUT = 2
+cons METHOD_CODE_DELETE = 3
+cons METHOD_CODE_PATCH = 4
+cons METHOD_CODE_HEAD = 5
+cons METHOD_CODE_OPTIONS = 6
+
+pub fn METHOD_GET: () :i64 { return 0 }
+pub fn METHOD_POST: () :i64 { return 1 }
+pub fn METHOD_PUT: () :i64 { return 2 }
+pub fn METHOD_DELETE: () :i64 { return 3 }
+pub fn METHOD_PATCH: () :i64 { return 4 }
+pub fn METHOD_HEAD: () :i64 { return 5 }
+pub fn METHOD_OPTIONS: () :i64 { return 6 }
+
+pub fn method_name: (m :i64) :str {
+    if m == METHOD_CODE_GET { return "GET" }
+    if m == METHOD_CODE_POST { return "POST" }
+    if m == METHOD_CODE_PUT { return "PUT" }
+    if m == METHOD_CODE_DELETE { return "DELETE" }
+    if m == METHOD_CODE_PATCH { return "PATCH" }
+    if m == METHOD_CODE_HEAD { return "HEAD" }
+    if m == METHOD_CODE_OPTIONS { return "OPTIONS" }
+    return "UNKNOWN"
+}
+
+pub fn method_from_str: (s :str) :i64 {
+    if s == "GET" { return METHOD_CODE_GET }
+    if s == "POST" { return METHOD_CODE_POST }
+    if s == "PUT" { return METHOD_CODE_PUT }
+    if s == "DELETE" { return METHOD_CODE_DELETE }
+    if s == "PATCH" { return METHOD_CODE_PATCH }
+    if s == "HEAD" { return METHOD_CODE_HEAD }
+    if s == "OPTIONS" { return METHOD_CODE_OPTIONS }
+    return -1
+}
+
+// ── Headers ─────────────────────────────────────────────────────
+
+pub fn headers_new: () :i64 {
+    return base::object()
+}
+
+pub fn headers_set: (headers :i64, name :str, value :str) :i64 {
+    return base::object_set(headers, name, base::string(value))
+}
+
+pub fn headers_get: (headers :i64, name :str) :str {
+    return base::as_string(base::object_get(headers, name))
+}
+
+pub fn headers_has: (headers :i64, name :str) :bool {
+    return base::object_has(headers, name)
+}
+
+pub fn headers_remove: (headers :i64, name :str) :i64 {
+    return base::object_remove(headers, name)
+}
+
+pub fn headers_count: (headers :i64) :i64 {
+    return base::object_len(headers)
+}
+
+pub fn headers_key_at: (headers :i64, index :i64) :str {
+    return base::object_key_at(headers, index)
+}
+
+pub fn headers_value_at: (headers :i64, index :i64) :str {
+    return base::as_string(base::object_value_at(headers, index))
+}
+
+// ── Request ─────────────────────────────────────────────────────
+
+pub fn request_new: (method :i64, url_value :i64) :i64 {
+    set req = base::object() :i64 mut
+    set req = base::object_set(req, "method", base::int(method))
+    set req = base::object_set(req, "url", url_value)
+    set req = base::object_set(req, "headers", base::object())
+    set req = base::object_set(req, "body", base::null())
+    return req
+}
+
+pub fn request_method: (req :i64) :i64 {
+    return base::as_int(base::object_get(req, "method"))
+}
+
+pub fn request_url: (req :i64) :i64 {
+    return base::object_get(req, "url")
+}
+
+pub fn request_headers: (req :i64) :i64 {
+    return base::object_get(req, "headers")
+}
+
+pub fn request_body: (req :i64) :i64 {
+    return base::object_get(req, "body")
+}
+
+pub fn request_set_headers: (req :i64, headers :i64) :i64 {
+    return base::object_set(req, "headers", headers)
+}
+
+pub fn request_set_body: (req :i64, body :i64) :i64 {
+    return base::object_set(req, "body", body)
+}
+
+pub fn request_set_header: (req :i64, name :str, value :str) :i64 {
+    set headers = base::object_get(req, "headers") :i64 mut
+    if !base::is_object(headers) {
+        set headers = base::object()
+        base::object_set(req, "headers", headers)
+    }
+    set headers = base::object_set(headers, name, base::string(value))
+    base::object_set(req, "headers", headers)
+    return req
+}
+
+// ── Response ────────────────────────────────────────────────────
+
+pub fn response_new: (status :i64) :i64 {
+    set resp = base::object() :i64 mut
+    set resp = base::object_set(resp, "status", base::int(status))
+    set resp = base::object_set(resp, "headers", base::object())
+    set resp = base::object_set(resp, "body", base::null())
+    return resp
+}
+
+pub fn response_status: (resp :i64) :i64 {
+    return base::as_int(base::object_get(resp, "status"))
+}
+
+pub fn response_headers: (resp :i64) :i64 {
+    return base::object_get(resp, "headers")
+}
+
+pub fn response_body: (resp :i64) :i64 {
+    return base::object_get(resp, "body")
+}
+
+pub fn response_set_headers: (resp :i64, headers :i64) :i64 {
+    return base::object_set(resp, "headers", headers)
+}
+
+pub fn response_set_body: (resp :i64, body :i64) :i64 {
+    return base::object_set(resp, "body", body)
+}
+
+pub fn response_set_header: (resp :i64, name :str, value :str) :i64 {
+    set headers = base::object_get(resp, "headers") :i64 mut
+    if !base::is_object(headers) {
+        set headers = base::object()
+        base::object_set(resp, "headers", headers)
+    }
+    set headers = base::object_set(headers, name, base::string(value))
+    base::object_set(resp, "headers", headers)
+    return resp
+}
+
+// ── Client configuration ────────────────────────────────────────
+
+pub fn client_new: (base_url :str) :i64 {
+    set client = base::object() :i64 mut
+    set client = base::object_set(client, "base_url", url::parse(base_url))
+    set client = base::object_set(client, "default_headers", base::object())
+    set client = base::object_set(client, "timeout", base::int(30000))
+    return client
+}
+
+pub fn client_base_url: (client :i64) :i64 {
+    return base::object_get(client, "base_url")
+}
+
+pub fn client_timeout: (client :i64) :i64 {
+    return base::as_int(base::object_get(client, "timeout"))
+}
+
+pub fn client_set_timeout: (client :i64, millis :i64) :i64 {
+    return base::object_set(client, "timeout", base::int(millis))
+}
+
+pub fn client_set_default_header: (client :i64, name :str, value :str) :i64 {
+    set headers = base::object_get(client, "default_headers") :i64 mut
+    if !base::is_object(headers) {
+        set headers = base::object()
+        base::object_set(client, "default_headers", headers)
+    }
+    set headers = base::object_set(headers, name, base::string(value))
+    base::object_set(client, "default_headers", headers)
+    return client
+}
+
+// ── Cookies ─────────────────────────────────────────────────────
+
+pub fn cookie_new: (name :str, value :str) :i64 {
+    set cookie = base::object() :i64 mut
+    set cookie = base::object_set(cookie, "name", base::string(name))
+    set cookie = base::object_set(cookie, "value", base::string(value))
+    set cookie = base::object_set(cookie, "domain", base::string(""))
+    set cookie = base::object_set(cookie, "path", base::string(""))
+    set cookie = base::object_set(cookie, "expires", base::int(0))
+    set cookie = base::object_set(cookie, "expires_text", base::string(""))
+    set cookie = base::object_set(cookie, "secure", base::bool(false))
+    set cookie = base::object_set(cookie, "http_only", base::bool(false))
+    return cookie
+}
+
+pub fn cookie_name: (cookie :i64) :str {
+    return base::as_string(base::object_get(cookie, "name"))
+}
+
+pub fn cookie_value: (cookie :i64) :str {
+    return base::as_string(base::object_get(cookie, "value"))
+}
+
+fn cookie_text: (cookie :i64, key :str) :str {
+    return base::as_string(base::object_get(cookie, key))
+}
+
+fn cookie_flag: (cookie :i64, key :str) :bool {
+    return base::as_bool(base::object_get(cookie, key))
+}
+
+// Parses a Set-Cookie header. Max-Age becomes the integer `expires` field;
+// an Expires date has no integer form here, so it is kept verbatim in
+// `expires_text` and serialized back exactly as received.
+pub fn cookie_parse: (header :str) :i64 {
+    set parts = str::split(header, ";")
+    set first = "" :str mut
+    if vec::len(parts) > 0 { set first = str::trim(vec::get::str(parts, 0)) }
+    set eq = str::index(first, "=")
+    set name = first :str mut
+    set value = "" :str mut
+    if eq >= 0 {
+        set name = str::trim(str::substr(first, 0, eq))
+        set value = str::trim(str::substr(first, eq + 1, str::len(first) - eq - 1))
+    }
+    set cookie = cookie_new(name, value) :i64 mut
+    set i = 1 :i64 mut
+    while i < vec::len(parts) {
+        set part = str::trim(vec::get::str(parts, i))
+        if part != "" {
+            set aeq = str::index(part, "=")
+            set attr = str::lower(part) :str mut
+            set attr_value = "" :str mut
+            if aeq >= 0 {
+                set attr = str::lower(str::substr(part, 0, aeq))
+                set attr_value = str::trim(str::substr(part, aeq + 1, str::len(part) - aeq - 1))
+            }
+            if attr == "domain" {
+                set cookie = base::object_set(cookie, "domain", base::string(attr_value))
+            } elif attr == "path" {
+                set cookie = base::object_set(cookie, "path", base::string(attr_value))
+            } elif attr == "max-age" {
+                set cookie = base::object_set(cookie, "expires", base::int(str::to::i64(attr_value)))
+            } elif attr == "expires" {
+                set cookie = base::object_set(cookie, "expires_text", base::string(attr_value))
+            } elif attr == "secure" {
+                set cookie = base::object_set(cookie, "secure", base::bool(true))
+            } elif attr == "httponly" {
+                set cookie = base::object_set(cookie, "http_only", base::bool(true))
+            }
+        }
+        set i = i + 1
+    }
+    return cookie
+}
+
+pub fn cookie_serialize: (cookie :i64) :str {
+    set out = cookie_text(cookie, "name") + "=" + cookie_text(cookie, "value") :str mut
+    set domain = cookie_text(cookie, "domain")
+    set path = cookie_text(cookie, "path")
+    set expires = base::as_int(base::object_get(cookie, "expires"))
+    set expires_text = cookie_text(cookie, "expires_text")
+    if domain != "" { set out = out + "; Domain=" + domain }
+    if path != "" { set out = out + "; Path=" + path }
+    if expires > 0 { set out = out + "; Max-Age=" + str::from::i64(expires) }
+    if expires_text != "" { set out = out + "; Expires=" + expires_text }
+    if cookie_flag(cookie, "secure") { set out = out + "; Secure" }
+    if cookie_flag(cookie, "http_only") { set out = out + "; HttpOnly" }
+    return out
+}
+
+pub fn cookie_jar_new: () :i64 {
+    return base::object()
+}
+
+pub fn cookie_jar_add: (jar :i64, cookie :i64) :i64 {
+    set name = cookie_name(cookie)
+    return base::object_set(jar, name, cookie)
+}
+
+pub fn cookie_jar_get: (jar :i64, name :str) :i64 {
+    return base::object_get(jar, name)
+}
+
+pub fn cookie_jar_remove: (jar :i64, name :str) :i64 {
+    return base::object_remove(jar, name)
+}

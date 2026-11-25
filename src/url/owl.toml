@@ -1,0 +1,8 @@
+[project]
+name = "url"
+entry = "mod.mire"
+
+[exports]
+parse = "parse"
+encode = "encode"
+resolve = "resolve"

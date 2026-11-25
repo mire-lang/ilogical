@@ -1,0 +1,86 @@
+// Per-symbol suite: ilogical::encoding Base64.
+//
+// Cases: success (RFC 4648 vectors in both alphabets), limit (empty input),
+// anomaly (invalid characters and non-multiple-of-four tails return an error
+// value rather than decoding a partial buffer).
+
+load ilogical
+load mire::bytes
+load mire::str
+load! /tests/_support/harness
+
+fn text_bytes: (s :&str) :ptr {
+    set n = bytes::str_len(s)
+    set buf = bytes::alloc(n)
+    set i = 0 :i64 mut
+    while i < n {
+        bytes::set_u8(buf, i, bytes::get_str_u8(s, i))
+        set i = i + 1
+    }
+    return buf
+}
+
+@[test]
+pub fn base64_success_known_vectors: () :bool {
+    set ok = true :bool mut
+    set buf = text_bytes("any carnal pleasure.")
+    if !use! harness::check_str("encoding/base64/pleasure", encoding::base64_encode(buf, 20), "YW55IGNhcm5hbCBwbGVhc3VyZS4=") { set ok = false }
+    set abc = text_bytes("abc")
+    if !use! harness::check_str("encoding/base64/abc", encoding::base64_encode(abc, 3), "YWJj") { set ok = false }
+    set ab = text_bytes("ab")
+    if !use! harness::check_str("encoding/base64/padding_2", encoding::base64_encode(ab, 2), "YWI=") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn base64_success_url_safe: () :bool {
+    set buf = text_bytes("subjects?_d")
+    set text = encoding::base64_url_encode(buf, 12)
+    set ok = true :bool mut
+    if !use! harness::check_false("encoding/base64url/no_plus", str::contains(text, "+")) { set ok = false }
+    if !use! harness::check_false("encoding/base64url/no_slash", str::contains(text, "/")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn base64_success_decode: () :bool {
+    set decoded = encoding::base64_decode("YW55IGNhcm5hbCBwbGVhc3VyZS4=")
+    set ok = true :bool mut
+    if !use! harness::check("encoding/base64/decode_is_bytes", base::is_bytes(decoded)) { set ok = false }
+    if !use! harness::check_i64("encoding/base64/decode_len", base::as_bytes_len(decoded), 20) { set ok = false }
+    if !use! harness::check_str("encoding/base64/decode_text", bytes::to_str(base::as_bytes_ptr(decoded), base::as_bytes_len(decoded)), "any carnal pleasure.") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn base64_success_decode_to_ptr: () :bool {
+    set out = 0 :ptr mut
+    set out_len = 0 :i64 mut
+    encoding::base64_decode_to_ptr("YWJj", &mut out, &mut out_len)
+    set ok = true :bool mut
+    if !use! harness::check_i64("encoding/base64/to_ptr_len", out_len, 3) { set ok = false }
+    if !use! harness::check_str("encoding/base64/to_ptr_text", bytes::to_str(out, out_len), "abc") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn base64_limit_empty: () :bool {
+    set zero = bytes::alloc(0)
+    set ok = true :bool mut
+    if !use! harness::check_str("encoding/base64/encode_empty", encoding::base64_encode(zero, 0), "") { set ok = false }
+    set decoded = encoding::base64_decode("")
+    if !use! harness::check_i64("encoding/base64/decode_empty_len", base::as_bytes_len(decoded), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn base64_anomaly_invalid_input: () :bool {
+    set bad_char = encoding::base64_decode("YWJj!")
+    set bad_tail = encoding::base64_decode("YWJj-")
+    set ok = true :bool mut
+    if !use! harness::check("encoding/base64/invalid_char/error", base::is_error(bad_char)) { set ok = false }
+    if !use! harness::check("encoding/base64/url_char_in_standard/error", base::is_error(bad_tail)) { set ok = false }
+    if !use! harness::check("encoding/base64/invalid_char/message", str::contains(base::as_string(bad_char), "base64")) { set ok = false }
+    use! harness::anomaly("encoding", "base64/invalid_char", "YWJj!", "error", base::as_string(bad_char), base::is_error(bad_char))
+    return ok
+}

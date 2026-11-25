@@ -1,0 +1,69 @@
+// Per-symbol suite: ilogical::base equals.
+//
+// Cases: success (same primitive values compare equal), limit (empty
+// containers, null vs false), anomaly (containers compare structurally, and a
+// different kind never equals a value with the same payload).
+
+load ilogical
+load mire::bytes
+load! /tests/_support/harness
+
+@[test]
+pub fn equals_success_primitives: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check("base/equals/null", base::equals(base::null(), base::null())) { set ok = false }
+    if !use! harness::check("base/equals/bool", base::equals(base::bool(true), base::bool(true))) { set ok = false }
+    if !use! harness::check("base/equals/int", base::equals(base::int(42), base::int(42))) { set ok = false }
+    if !use! harness::check("base/equals/float", base::equals(base::float(3.14 :f64), base::float(3.14 :f64))) { set ok = false }
+    if !use! harness::check("base/equals/string", base::equals(base::string("hello"), base::string("hello"))) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn equals_success_different_values: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_false("base/equals/int_different", base::equals(base::int(1), base::int(2))) { set ok = false }
+    if !use! harness::check_false("base/equals/bool_different", base::equals(base::bool(true), base::bool(false))) { set ok = false }
+    if !use! harness::check_false("base/equals/string_different", base::equals(base::string("a"), base::string("b"))) { set ok = false }
+    if !use! harness::check_false("base/equals/kind_mismatch", base::equals(base::array(), base::object())) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn equals_success_containers: () :bool {
+    set a1 = base::array() mut
+    set a1 = base::array_push(a1, base::int(1))
+    set a1 = base::array_push(a1, base::int(2))
+    set a2 = base::array() mut
+    set a2 = base::array_push(a2, base::int(1))
+    set a2 = base::array_push(a2, base::int(2))
+    set a3 = base::array() mut
+    set a3 = base::array_push(a3, base::int(1))
+    set o1 = base::object() mut
+    set o1 = base::object_set(o1, "a", base::int(1))
+    set o1 = base::object_set(o1, "b", base::int(2))
+    set o2 = base::object() mut
+    set o2 = base::object_set(o2, "b", base::int(2))
+    set o2 = base::object_set(o2, "a", base::int(1))
+    set ok = true :bool mut
+    if !use! harness::check("base/equals/arrays", base::equals(a1, a2)) { set ok = false }
+    if !use! harness::check_false("base/equals/arrays_different", base::equals(a1, a3)) { set ok = false }
+    if !use! harness::check("base/equals/objects_order_insensitive", base::equals(o1, o2)) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn equals_limit_empty: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check("base/equals/empty_arrays", base::equals(base::array(), base::array())) { set ok = false }
+    if !use! harness::check("base/equals/empty_objects", base::equals(base::object(), base::object())) { set ok = false }
+    if !use! harness::check_false("base/equals/null_vs_false", base::equals(base::null(), base::bool(false))) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn equals_anomaly_same_payload_different_kind: () :bool {
+    set ok = use! harness::check_false("base/equals/int_vs_string", base::equals(base::int(1), base::string("1")))
+    use! harness::anomaly("base", "equals/int_vs_string", "int(1) string(\"1\")", "false", "false", !base::equals(base::int(1), base::string("1")))
+    return ok
+}

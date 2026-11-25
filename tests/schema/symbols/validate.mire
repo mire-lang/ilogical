@@ -1,0 +1,87 @@
+// Per-symbol suite: ilogical::schema validate.
+//
+// Cases: success (a composite document schema validates as a whole), limit (an
+// empty object document satisfies a schema whose fields are all optional),
+// anomaly (a null schema handle behaves like `any` because every introspector
+// reads a missing "kind" as 0; an unknown kind is an explicit error).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn schema_validate_success_composite: () :bool {
+    set tags = schema::array_schema(schema::type_schema("string"))
+    set s = schema::object_schema() mut
+    set s = schema::object_field(s, "name", schema::type_schema("string"), true)
+    set s = schema::object_field(s, "tags", tags, false)
+    set doc = base::object() mut
+    set doc = base::object_set(doc, "name", base::string("ana"))
+    set tag_list = base::array() mut
+    set tag_list = base::array_push(tag_list, base::string("a"))
+    set tag_list = base::array_push(tag_list, base::string("b"))
+    set doc = base::object_set(doc, "tags", tag_list)
+    return use! harness::check_i64("schema/validate/composite", schema::validate(s, doc), 0)
+}
+
+@[test]
+pub fn schema_validate_success_union_of_objects: () :bool {
+    set by_id = schema::object_schema() mut
+    set by_id = schema::object_field(by_id, "id", schema::type_schema("int"), true)
+    set by_name = schema::object_schema() mut
+    set by_name = schema::object_field(by_name, "name", schema::type_schema("string"), true)
+    set variants = base::array() mut
+    set variants = base::array_push(variants, by_id)
+    set variants = base::array_push(variants, by_name)
+    set s = schema::union_schema(variants)
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/validate/union_object_id", schema::validate(s, base::object_set(base::object(), "id", base::int(1))), 0) { set ok = false }
+    if !use! harness::check_i64("schema/validate/union_object_name", schema::validate(s, base::object_set(base::object(), "name", base::string("x"))), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_validate_limit_optional_document: () :bool {
+    set s = schema::object_schema() mut
+    set s = schema::object_field(s, "opt", schema::type_schema("int"), false)
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/validate/empty_document", schema::validate(s, base::object()), 0) { set ok = false }
+    if !use! harness::check_i64("schema/validate/empty_string_value", schema::validate(schema::any(), base::string("")), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_validate_anomaly_null_schema_is_any: () :bool {
+    set null_schema = base::null()
+    set accepted = schema::validate(null_schema, base::string("anything"))
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/validate/null_schema/accepts", accepted, 0) { set ok = false }
+    if !use! harness::check_i64("schema/validate/null_schema/kind", schema::schema_kind(null_schema), 0) { set ok = false }
+    use! harness::anomaly("schema", "validate/null_handle_is_any", "null", "0", str::from::i64(accepted), accepted == 0)
+    return ok
+}
+
+@[test]
+pub fn schema_validate_anomaly_unknown_kind: () :bool {
+    set s = base::object_set(base::object(), "kind", base::int(99))
+    set err = schema::validate(s, base::int(1))
+    set ok = true :bool mut
+    if !use! harness::check("schema/validate/unknown/error", base::is_error(err)) { set ok = false }
+    if !use! harness::check_str("schema/validate/unknown/message", base::as_string(err), "unknown schema kind") { set ok = false }
+    use! harness::anomaly("schema", "validate/unknown_kind", "kind=99", "unknown schema kind", base::as_string(err), base::is_error(err))
+    return ok
+}
+
+@[test]
+pub fn schema_validate_anomaly_error_is_prefixed: () :bool {
+    set inner = schema::type_schema("int")
+    set s = schema::object_schema() mut
+    set s = schema::object_field(s, "count", inner, true)
+    set err = schema::validate(s, base::object_set(base::object(), "count", base::string("no")))
+    set message = base::as_string(err)
+    set ok = true :bool mut
+    if !use! harness::check("schema/validate/prefix/field", str::contains(message, "field count:")) { set ok = false }
+    if !use! harness::check("schema/validate/prefix/reason", str::contains(message, "expected int")) { set ok = false }
+    use! harness::anomaly("schema", "validate/prefixed_error", "count=\"no\"", "field count: type mismatch", message, str::contains(message, "field count:"))
+    return ok
+}

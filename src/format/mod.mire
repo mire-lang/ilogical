@@ -1,0 +1,1978 @@
+module format
+
+// ilogical::format — JSON, TOML and binary codecs.
+//
+// Every decoder builds a base::Value tree, and every encoder walks one. The
+// codecs are pure Mire: there is no rt_json_* or rt_toml_* symbol to link, so a
+// program that only loads ilogical::format never needs a C toolchain or a
+// native library beyond the compiler runtime.
+//
+// Error handling follows one rule: a decode that fails returns a value of kind
+// base::K_ERROR whose string is a human-readable message with a source
+// position. Callers test it with base::is_error / base::as_string.
+//
+// The binary format is documented next to its encoder below. It is a
+// deterministic length-prefixed format, not a wire-compatible MessagePack
+// implementation.
+
+load ilogical::base
+load ilogical::buffer
+load mire::bytes
+load mire::str
+load mire::aux::pal
+
+// ── Parser state ────────────────────────────────────────────────
+// A 40-byte record shared by the JSON, TOML and binary readers:
+//
+//   offset 0   byte position
+//   offset 8   byte length
+//   offset 16  failed flag (0 or 1)
+//   offset 24  failure position
+//   offset 32  recursion depth
+
+cons PST_POS = 0
+cons PST_LEN = 8
+cons PST_ERR = 16
+cons PST_ERRPOS = 24
+cons PST_DEPTH = 32
+cons PST_SIZE = 40
+cons MAX_DEPTH = 512
+
+fn pst_new: (s :&str) :i64 {
+    set rec = bytes::alloc(PST_SIZE)
+    if rec == 0 { return 0 }
+    pal::write_u64(rec, 0)
+    pal::write_u64(pal::ptr_add(rec, PST_LEN), bytes::str_len(s))
+    pal::write_u64(pal::ptr_add(rec, PST_ERR), 0)
+    pal::write_u64(pal::ptr_add(rec, PST_ERRPOS), 0)
+    pal::write_u64(pal::ptr_add(rec, PST_DEPTH), 0)
+    return rec :i64
+}
+
+fn pst_free: (st :i64) {
+    if st == 0 { return }
+    set rec = st :ptr
+    bytes::free(rec)
+}
+
+fn pst_pos: (st :i64) :i64 {
+    set rec = st :ptr
+    return pal::read_u64(rec)
+}
+
+fn pst_len: (st :i64) :i64 {
+    set rec = st :ptr
+    return pal::read_u64(pal::ptr_add(rec, PST_LEN))
+}
+
+fn pst_set_pos: (st :i64, pos :i64) {
+    set rec = st :ptr
+    pal::write_u64(rec, pos)
+}
+
+fn pst_failed: (st :i64) :bool {
+    set rec = st :ptr
+    return pal::read_u64(pal::ptr_add(rec, PST_ERR)) != 0
+}
+
+fn pst_fail: (st :i64, pos :i64) {
+    if pst_failed(st) { return }
+    set rec = st :ptr
+    pal::write_u64(pal::ptr_add(rec, PST_ERR), 1)
+    pal::write_u64(pal::ptr_add(rec, PST_ERRPOS), pos)
+}
+
+fn pst_enter: (st :i64) :bool {
+    set rec = st :ptr
+    set depth = pal::read_u64(pal::ptr_add(rec, PST_DEPTH))
+    if depth >= MAX_DEPTH {
+        pst_fail(st, pst_pos(st))
+        return false
+    }
+    pal::write_u64(pal::ptr_add(rec, PST_DEPTH), depth + 1)
+    return true
+}
+
+fn pst_leave: (st :i64) {
+    set rec = st :ptr
+    set depth = pal::read_u64(pal::ptr_add(rec, PST_DEPTH))
+    if depth > 0 { pal::write_u64(pal::ptr_add(rec, PST_DEPTH), depth - 1) }
+}
+
+// Line and column, both 1-based, of a byte position. The codecs report the
+// position the reader stopped at, which is what a user has to look at.
+fn pst_line: (s :&str, pos :i64) :i64 {
+    set line = 1 :i64 mut
+    set i = 0 :i64 mut
+    while i < pos {
+        set c = bytes::get_str_u8(s, i)
+        if c == 10 { set line = line + 1 }
+        set i = i + 1
+    }
+    return line
+}
+
+fn pst_col: (s :&str, pos :i64) :i64 {
+    set col = 1 :i64 mut
+    set i = 0 :i64 mut
+    while i < pos {
+        set c = bytes::get_str_u8(s, i)
+        if c == 10 { set col = 1 } else { set col = col + 1 }
+        set i = i + 1
+    }
+    return col
+}
+
+fn pst_error: (s :&str, st :i64, what :str) :i64 {
+    set rec = st :ptr
+    set pos = pal::read_u64(pal::ptr_add(rec, PST_ERRPOS))
+    set line = pst_line(s, pos)
+    set col = pst_col(s, pos)
+    set msg = what + " at line " + str::from::i64(line) + ", column " + str::from::i64(col)
+    return base::error(msg)
+}
+
+// ── Shared helpers ──────────────────────────────────────────────
+
+fn is_space: (c :i64) :bool {
+    return c == 32 || c == 9 || c == 10 || c == 13
+}
+
+fn is_digit: (c :i64) :bool {
+    return c >= 48 && c <= 57
+}
+
+fn hex_digit: (c :i64) :i64 {
+    if c >= 48 && c <= 57 { return c - 48 }
+    if c >= 65 && c <= 70 { return c - 55 }
+    if c >= 97 && c <= 102 { return c - 87 }
+    return -1
+}
+
+fn push_utf8: (b :i64, cp :i64) {
+    if cp < 0 { return }
+    if cp <= 127 {
+        buffer::push_u8(b, cp)
+        return
+    }
+    if cp <= 2047 {
+        set b1 = 192 + (cp >> 6)
+        set b2 = 128 + (cp & 63)
+        buffer::push_u8(b, b1)
+        buffer::push_u8(b, b2)
+        return
+    }
+    if cp <= 65535 {
+        set b1 = 224 + (cp >> 12)
+        set b2 = 128 + ((cp >> 6) & 63)
+        set b3 = 128 + (cp & 63)
+        buffer::push_u8(b, b1)
+        buffer::push_u8(b, b2)
+        buffer::push_u8(b, b3)
+        return
+    }
+    set b1 = 240 + (cp >> 18)
+    set b2 = 128 + ((cp >> 12) & 63)
+    set b3 = 128 + ((cp >> 6) & 63)
+    set b4 = 128 + (cp & 63)
+    buffer::push_u8(b, b1)
+    buffer::push_u8(b, b2)
+    buffer::push_u8(b, b3)
+    buffer::push_u8(b, b4)
+}
+
+fn push_hex4: (b :i64, cp :i64) {
+    set d3 = (cp >> 12) & 15
+    set d2 = (cp >> 8) & 15
+    set d1 = (cp >> 4) & 15
+    set d0 = cp & 15
+    buffer::push_u8(b, 92)
+    buffer::push_u8(b, 117)
+    buffer::push_u8(b, hex_upper(d3))
+    buffer::push_u8(b, hex_upper(d2))
+    buffer::push_u8(b, hex_upper(d1))
+    buffer::push_u8(b, hex_upper(d0))
+}
+
+fn hex_upper: (d :i64) :i64 {
+    if d < 10 { return 48 + d }
+    return 55 + d
+}
+
+fn parse_u64_token: (tok :&str) :i64 {
+    set n = bytes::str_len(tok)
+    set i = 0 :i64 mut
+    set acc = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(tok, i)
+        if c == 95 {
+            set i = i + 1
+        } else {
+            set d = hex_digit(c)
+            if d < 0 { return -1 }
+            set acc = acc * 16 + d
+            set i = i + 1
+        }
+    }
+    return acc
+}
+
+// Decimal digits to i64 with an overflow check. Returns false when the value
+// does not fit; the caller decides whether that is an error (TOML integers)
+// or a reason to fall back to a float (JSON numbers). Negative
+// -9223372036854775808 is reported as overflow too, because its magnitude has
+// no positive i64 counterpart; it then takes the float path.
+fn parse_dec_i64_checked: (tok :&str, out :&mut i64) :bool {
+    set n = bytes::str_len(tok)
+    set i = 0 :i64 mut
+    set neg = false :bool mut
+    if i < n && bytes::get_str_u8(tok, i) == 45 {
+        set neg = true
+        set i = i + 1
+    }
+    set acc = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(tok, i)
+        if c == 95 {
+            set i = i + 1
+        } elif is_digit(c) {
+            set d = c - 48
+            if acc > 922337203685477580 { return false }
+            if acc == 922337203685477580 && d > 7 { return false }
+            set acc = acc * 10 + d
+            set i = i + 1
+        } else {
+            return false
+        }
+    }
+    if neg { set *out = 0 - acc } else { set *out = acc }
+    return true
+}
+
+fn parse_dec_i64: (tok :&str) :i64 {
+    set n = bytes::str_len(tok)
+    set i = 0 :i64 mut
+    set neg = false :bool mut
+    if i < n && bytes::get_str_u8(tok, i) == 45 {
+        set neg = true
+        set i = i + 1
+    }
+    set acc = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(tok, i)
+        if c == 95 {
+            set i = i + 1
+        } elif is_digit(c) {
+            set acc = acc * 10 + (c - 48)
+            set i = i + 1
+        } else {
+            return 0
+        }
+    }
+    if neg { return 0 - acc }
+    return acc
+}
+
+// Decimal to double without strtod. The mantissa is an i64 while it fits
+// (which covers every JSON/TOML literal a human writes); digits past that are
+// folded into the exponent so magnitude stays right and precision stays as
+// close as an i64 accumulator can carry.
+fn parse_f64_token: (tok :&str) :f64 {
+    set n = bytes::str_len(tok)
+    set i = 0 :i64 mut
+    set neg = false :bool mut
+    if i < n && bytes::get_str_u8(tok, i) == 45 {
+        set neg = true
+        set i = i + 1
+    } elif i < n && bytes::get_str_u8(tok, i) == 43 {
+        set i = i + 1
+    }
+    set mant = 0 :i64 mut
+    set frac = 0 :i64 mut
+    set extra = 0 :i64 mut
+    set saturated = false :bool mut
+    while i < n {
+        set c = bytes::get_str_u8(tok, i)
+        if is_digit(c) {
+            if !saturated {
+                if mant <= 922337203685477580 {
+                    set mant = mant * 10 + (c - 48)
+                } else {
+                    set saturated = true
+                    set extra = extra + 1
+                }
+            } else {
+                set extra = extra + 1
+            }
+            set i = i + 1
+        } else {
+            break
+        }
+    }
+    if i < n && bytes::get_str_u8(tok, i) == 46 {
+        set i = i + 1
+        while i < n {
+            set c = bytes::get_str_u8(tok, i)
+            if is_digit(c) {
+                if !saturated {
+                    if mant <= 922337203685477580 {
+                        set mant = mant * 10 + (c - 48)
+                        set frac = frac + 1
+                    } else {
+                        set saturated = true
+                    }
+                }
+                set i = i + 1
+            } else {
+                break
+            }
+        }
+    }
+    set exp = 0 :i64 mut
+    set esign = 1 :i64 mut
+    if i < n {
+        set e = bytes::get_str_u8(tok, i)
+        if e == 101 || e == 69 {
+            set i = i + 1
+            if i < n && bytes::get_str_u8(tok, i) == 45 {
+                set esign = -1
+                set i = i + 1
+            } elif i < n && bytes::get_str_u8(tok, i) == 43 {
+                set i = i + 1
+            }
+            while i < n && is_digit(bytes::get_str_u8(tok, i)) {
+                set exp = exp * 10 + (bytes::get_str_u8(tok, i) - 48)
+                set i = i + 1
+            }
+        }
+    }
+    set value = mant :f64 mut
+    set power = exp * esign + extra - frac
+    // Apply the decimal exponent in one operation rather than one digit at a
+    // time. `314.0 / 100.0` rounds once to the same double as the literal
+    // 3.14, while `314.0 / 10.0 / 10.0` carries an intermediate rounding error
+    // and lands one ulp lower.
+    set scale = 1.0 :f64 mut
+    set k = 0 :i64 mut
+    if power > 0 {
+        while k < power {
+            set scale = scale * 10.0
+            set k = k + 1
+        }
+        set value = value * scale
+    } elif power < 0 {
+        set p = 0 - power
+        while k < p {
+            set scale = scale * 10.0
+            set k = k + 1
+        }
+        set value = value / scale
+    }
+    if neg { return 0.0 - value }
+    return value
+}
+
+// ── JSON reader ─────────────────────────────────────────────────
+
+fn jskip: (s :&str, st :i64) {
+    set pos = pst_pos(st) mut
+    set len = pst_len(st)
+    while pos < len {
+        set c = bytes::get_str_u8(s, pos)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            set pos = pos + 1
+        } else {
+            break
+        }
+    }
+    pst_set_pos(st, pos)
+}
+
+fn jpeek: (s :&str, st :i64) :i64 {
+    set pos = pst_pos(st)
+    if pos >= pst_len(st) { return -1 }
+    return bytes::get_str_u8(s, pos)
+}
+
+fn jliteral: (s :&str, st :i64, lit :&str, value :i64) :i64 {
+    set pos = pst_pos(st)
+    set n = bytes::str_len(lit)
+    if pos + n > pst_len(st) {
+        pst_fail(st, pos)
+        return base::null()
+    }
+    set i = 0 :i64 mut
+    while i < n {
+        set off = pos + i
+        if bytes::get_str_u8(s, off) != bytes::get_str_u8(lit, i) {
+            pst_fail(st, pos)
+            return base::null()
+        }
+        set i = i + 1
+    }
+    pst_set_pos(st, pos + n)
+    return value
+}
+
+fn jstring_raw: (s :&str, st :i64) :str {
+    set pos = pst_pos(st) mut
+    if pos >= pst_len(st) || bytes::get_str_u8(s, pos) != 34 {
+        pst_fail(st, pos)
+        return ""
+    }
+    set pos = pos + 1
+    set out = buffer::new(32)
+    set len = pst_len(st)
+    set closed = false :bool mut
+    while pos < len {
+        set c = bytes::get_str_u8(s, pos)
+        if c == 34 {
+            set pos = pos + 1
+            set closed = true
+            break
+        }
+        if c == 92 {
+            set pos = pos + 1
+            if pos >= len { break }
+            set e = bytes::get_str_u8(s, pos)
+if e == 34 { buffer::push_u8(out, 34)
+                set pos = pos + 1 } elif e == 92 { buffer::push_u8(out, 92)
+                set pos = pos + 1 } elif e == 47 { buffer::push_u8(out, 47)
+                set pos = pos + 1 } elif e == 98 { buffer::push_u8(out, 8)
+                set pos = pos + 1 } elif e == 102 { buffer::push_u8(out, 12)
+                set pos = pos + 1 } elif e == 110 { buffer::push_u8(out, 10)
+                set pos = pos + 1 } elif e == 114 { buffer::push_u8(out, 13)
+                set pos = pos + 1 } elif e == 116 { buffer::push_u8(out, 9)
+                set pos = pos + 1 } elif e == 117 {
+                if pos + 5 > len {
+                    pst_fail(st, pos)
+                    break
+                }
+                set cp = read_hex4(s, pos + 1)
+                if cp < 0 {
+                    pst_fail(st, pos)
+                    break
+                }
+                set pos = pos + 5
+                if cp >= 55296 && cp <= 56319 {
+                    if pos + 6 <= len && bytes::get_str_u8(s, pos) == 92 && bytes::get_str_u8(s, pos + 1) == 117 {
+                        set low = read_hex4(s, pos + 2)
+                        if low >= 56320 && low <= 57343 {
+                            set combined = 65536 + ((cp - 55296) << 10) + (low - 56320)
+                            push_utf8(out, combined)
+                            set pos = pos + 6
+                        } else {
+                            pst_fail(st, pos)
+                            break
+                        }
+                    } else {
+                        pst_fail(st, pos)
+                        break
+                    }
+                } elif cp >= 56320 && cp <= 57343 {
+                    pst_fail(st, pos)
+                    break
+                } else {
+                    push_utf8(out, cp)
+                }
+            } else {
+                pst_fail(st, pos)
+                break
+            }
+        } else {
+            if c < 32 {
+                pst_fail(st, pos)
+                break
+            }
+            buffer::push_u8(out, c)
+            set pos = pos + 1
+        }
+    }
+    if !closed { pst_fail(st, pos) }
+    set text = buffer::to_str(out)
+    buffer::free(out)
+    if pst_failed(st) { return "" }
+    pst_set_pos(st, pos)
+    return text
+}
+
+fn read_hex4: (s :&str, pos :i64) :i64 {
+    set acc = 0 :i64 mut
+    set i = 0 :i64 mut
+    while i < 4 {
+        set c = bytes::get_str_u8(s, pos + i)
+        set d = hex_digit(c)
+        if d < 0 { return -1 }
+        set acc = acc * 16 + d
+        set i = i + 1
+    }
+    return acc
+}
+
+fn jnumber: (s :&str, st :i64) :i64 {
+    set start = pst_pos(st)
+    set pos = start mut
+    set len = pst_len(st)
+    while pos < len {
+        set c = bytes::get_str_u8(s, pos)
+        if is_digit(c) || c == 45 || c == 43 || c == 46 || c == 101 || c == 69 {
+            set pos = pos + 1
+        } else {
+            break
+        }
+    }
+    if pos == start {
+        pst_fail(st, start)
+        return base::null()
+    }
+    set tok = str::substr(s, start, pos - start)
+    if !json_number_ok(tok) {
+        pst_fail(st, start)
+        return base::null()
+    }
+    pst_set_pos(st, pos)
+    if json_number_is_float(tok) {
+        return base::float(parse_f64_token(tok))
+    }
+    set parsed = 0 :i64 mut
+    if parse_dec_i64_checked(tok, &mut parsed) {
+        return base::int(parsed)
+    }
+    // A magnitude that does not fit a signed 64-bit integer still has a
+    // nearest double, and JSON itself puts no width limit on numbers.
+    return base::float(parse_f64_token(tok))
+}
+
+fn decimal_digits: (tok :&str) :i64 {
+    set n = bytes::str_len(tok)
+    set i = 0 :i64 mut
+    set count = 0 :i64 mut
+    while i < n {
+        if is_digit(bytes::get_str_u8(tok, i)) { set count = count + 1 }
+        set i = i + 1
+    }
+    return count
+}
+
+fn json_number_is_float: (tok :&str) :bool {
+    set n = bytes::str_len(tok)
+    set i = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(tok, i)
+        if c == 46 || c == 101 || c == 69 { return true }
+        set i = i + 1
+    }
+    return false
+}
+
+fn json_number_ok: (tok :&str) :bool {
+    set n = bytes::str_len(tok)
+    if n == 0 { return false }
+    set i = 0 :i64 mut
+    if bytes::get_str_u8(tok, i) == 45 {
+        set i = i + 1
+        if i >= n { return false }
+    }
+    set int_start = i
+    while i < n && is_digit(bytes::get_str_u8(tok, i)) { set i = i + 1 }
+    if i == int_start { return false }
+    if bytes::get_str_u8(tok, int_start) == 48 && i - int_start > 1 { return false }
+    if i < n && bytes::get_str_u8(tok, i) == 46 {
+        set i = i + 1
+        set frac_start = i
+        while i < n && is_digit(bytes::get_str_u8(tok, i)) { set i = i + 1 }
+        if i == frac_start { return false }
+    }
+    if i < n {
+        set c = bytes::get_str_u8(tok, i)
+        if c != 101 && c != 69 { return false }
+        set i = i + 1
+        if i < n {
+            set sign = bytes::get_str_u8(tok, i)
+            if sign == 43 || sign == 45 { set i = i + 1 }
+        }
+        set exp_start = i
+        while i < n && is_digit(bytes::get_str_u8(tok, i)) { set i = i + 1 }
+        if i == exp_start { return false }
+    }
+    return i == n
+}
+
+fn jvalue: (s :&str, st :i64) :i64 {
+    if !pst_enter(st) { return base::null() }
+    jskip(s, st)
+    if pst_failed(st) {
+        pst_leave(st)
+        return base::null()
+    }
+    set pos = pst_pos(st)
+    if pos >= pst_len(st) {
+        pst_fail(st, pos)
+        pst_leave(st)
+        return base::null()
+    }
+    set c = bytes::get_str_u8(s, pos)
+    set v = base::null() :i64 mut
+    if c == 123 { set v = jobject(s, st) } elif c == 91 { set v = jarray(s, st) } elif c == 34 {
+        set text = jstring_raw(s, st)
+        if pst_failed(st) { set v = base::null() } else { set v = base::string(text) }
+    } elif c == 116 { set v = jliteral(s, st, "true", base::bool(true)) } elif c == 102 { set v = jliteral(s, st, "false", base::bool(false)) } elif c == 110 { set v = jliteral(s, st, "null", base::null()) } elif c == 45 || is_digit(c) { set v = jnumber(s, st) } else {
+        pst_fail(st, pos)
+        set v = base::null()
+    }
+    pst_leave(st)
+    return v
+}
+
+fn jarray: (s :&str, st :i64) :i64 {
+    set pos = pst_pos(st) + 1
+    pst_set_pos(st, pos)
+    set out = base::array() mut
+    jskip(s, st)
+    if pst_failed(st) { return out }
+    if jpeek(s, st) == 93 {
+        pst_set_pos(st, pst_pos(st) + 1)
+        return out
+    }
+    while true {
+        set v = jvalue(s, st)
+        if pst_failed(st) { return out }
+        set out = base::array_push(out, v)
+        jskip(s, st)
+        if pst_failed(st) { return out }
+        set c = jpeek(s, st)
+        if c == 44 {
+            pst_set_pos(st, pst_pos(st) + 1)
+            jskip(s, st)
+            if jpeek(s, st) == 93 {
+                pst_fail(st, pst_pos(st))
+                return out
+            }
+        } elif c == 93 {
+            pst_set_pos(st, pst_pos(st) + 1)
+            return out
+        } else {
+            pst_fail(st, pst_pos(st))
+            return out
+        }
+    }
+    return out
+}
+
+fn jobject: (s :&str, st :i64) :i64 {
+    set pos = pst_pos(st) + 1
+    pst_set_pos(st, pos)
+    set out = base::object() mut
+    jskip(s, st)
+    if pst_failed(st) { return out }
+    if jpeek(s, st) == 125 {
+        pst_set_pos(st, pst_pos(st) + 1)
+        return out
+    }
+    while true {
+        jskip(s, st)
+        if jpeek(s, st) != 34 {
+            pst_fail(st, pst_pos(st))
+            return out
+        }
+        set key = jstring_raw(s, st)
+        if pst_failed(st) { return out }
+        jskip(s, st)
+        if jpeek(s, st) != 58 {
+            pst_fail(st, pst_pos(st))
+            return out
+        }
+        pst_set_pos(st, pst_pos(st) + 1)
+        set v = jvalue(s, st)
+        if pst_failed(st) { return out }
+        set out = base::object_set(out, key, v)
+        jskip(s, st)
+        if pst_failed(st) { return out }
+        set c = jpeek(s, st)
+        if c == 44 {
+            pst_set_pos(st, pst_pos(st) + 1)
+            jskip(s, st)
+            if jpeek(s, st) == 125 {
+                pst_fail(st, pst_pos(st))
+                return out
+            }
+        } elif c == 125 {
+            pst_set_pos(st, pst_pos(st) + 1)
+            return out
+        } else {
+            pst_fail(st, pst_pos(st))
+            return out
+        }
+    }
+    return out
+}
+
+pub fn json_decode: (s :str) :i64 {
+    set st = pst_new(s)
+    if st == 0 { return base::error("JSON: out of memory") }
+    jskip(s, st)
+    set v = jvalue(s, st)
+    jskip(s, st)
+    if !pst_failed(st) && pst_pos(st) != pst_len(st) {
+        pst_fail(st, pst_pos(st))
+    }
+    if pst_failed(st) {
+        set err = pst_error(s, st, "invalid JSON")
+        pst_free(st)
+        return err
+    }
+    pst_free(st)
+    return v
+}
+
+// ── JSON writer ─────────────────────────────────────────────────
+
+fn jenc_string: (b :i64, s :&str) {
+    set n = bytes::str_len(s)
+    buffer::push_u8(b, 34)
+    set i = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(s, i)
+        if c == 34 {
+            buffer::push_str(b, "\\\"")
+        } elif c == 92 {
+            buffer::push_str(b, "\\\\")
+        } elif c == 8 {
+            buffer::push_str(b, "\\b")
+        } elif c == 12 {
+            buffer::push_str(b, "\\f")
+        } elif c == 10 {
+            buffer::push_str(b, "\\n")
+        } elif c == 13 {
+            buffer::push_str(b, "\\r")
+        } elif c == 9 {
+            buffer::push_str(b, "\\t")
+        } elif c < 32 {
+            push_hex4(b, c)
+        } else {
+            buffer::push_u8(b, c)
+        }
+        set i = i + 1
+    }
+    buffer::push_u8(b, 34)
+}
+
+fn jfloat_finite: (v :f64) :bool {
+    if v != v { return false }
+    if v > 1.7976931348623157e308 { return false }
+    if v < 0.0 - 1.7976931348623157e308 { return false }
+    return true
+}
+
+fn jfloat_text: (v :f64) :str {
+    set text = str::from::f64(v)
+    if str::contains(text, ".") || str::contains(text, "e") || str::contains(text, "E") {
+        return text
+    }
+    return text + ".0"
+}
+
+fn jenc_value: (b :i64, v :i64, pretty :bool, unit :&str, level :i64) {
+    set k = base::kind(v)
+    if k == base::K_NULL() {
+        buffer::push_str(b, "null")
+        return
+    }
+    if k == base::K_BOOL() {
+        if base::as_bool(v) { buffer::push_str(b, "true") } else { buffer::push_str(b, "false") }
+        return
+    }
+    if k == base::K_INT() {
+        buffer::push_i64(b, base::as_int(v))
+        return
+    }
+    if k == base::K_FLOAT() {
+        set f = base::as_float(v)
+        if !jfloat_finite(f) { buffer::push_str(b, "null") } else { buffer::push_str(b, jfloat_text(f)) }
+        return
+    }
+    if k == base::K_STRING() {
+        jenc_string(b, base::as_string(v))
+        return
+    }
+    if k == base::K_ERROR() {
+        jenc_string(b, base::as_string(v))
+        return
+    }
+    if k == base::K_BYTES() {
+        // JSON has no byte type. An array of integers is the only lossless,
+        // dependency-free representation, and it is what every decoder that
+        // accepts it expects.
+        buffer::push_u8(b, 91)
+        set n = base::as_bytes_len(v)
+        set i = 0 :i64 mut
+        while i < n {
+            if i > 0 { buffer::push_u8(b, 44) }
+            buffer::push_i64(b, bytes::get_u8(base::as_bytes_ptr(v), i))
+            set i = i + 1
+        }
+        buffer::push_u8(b, 93)
+        return
+    }
+    if k == base::K_ARRAY() {
+        set n = base::array_len(v)
+        buffer::push_u8(b, 91)
+        if n == 0 {
+            buffer::push_u8(b, 93)
+            return
+        }
+        set i = 0 :i64 mut
+        while i < n {
+            if i > 0 { buffer::push_u8(b, 44) }
+            if pretty {
+                buffer::push_u8(b, 10)
+                buffer::push_str(b, str::repeat(unit, level + 1))
+            }
+            jenc_value(b, base::array_get(v, i), pretty, unit, level + 1)
+            set i = i + 1
+        }
+        if pretty {
+            buffer::push_u8(b, 10)
+            buffer::push_str(b, str::repeat(unit, level))
+        }
+        buffer::push_u8(b, 93)
+        return
+    }
+    if k == base::K_OBJECT() {
+        set n = base::object_len(v)
+        buffer::push_u8(b, 123)
+        if n == 0 {
+            buffer::push_u8(b, 125)
+            return
+        }
+        set i = 0 :i64 mut
+        while i < n {
+            if i > 0 { buffer::push_u8(b, 44) }
+            if pretty {
+                buffer::push_u8(b, 10)
+                buffer::push_str(b, str::repeat(unit, level + 1))
+            }
+            jenc_string(b, base::object_key_at(v, i))
+            buffer::push_u8(b, 58)
+            if pretty { buffer::push_u8(b, 32) }
+            jenc_value(b, base::object_value_at(v, i), pretty, unit, level + 1)
+            set i = i + 1
+        }
+        if pretty {
+            buffer::push_u8(b, 10)
+            buffer::push_str(b, str::repeat(unit, level))
+        }
+        buffer::push_u8(b, 125)
+        return
+    }
+    buffer::push_str(b, "null")
+}
+
+pub fn json_encode: (v :i64) :str {
+    set b = buffer::new(128)
+    if b == 0 { return "" }
+    jenc_value(b, v, false, "", 0)
+    set out = buffer::to_str(b)
+    buffer::free(b)
+    return out
+}
+
+pub fn json_encode_pretty: (v :i64, indent :str) :str {
+    set unit = indent mut
+    if bytes::str_len(unit) == 0 { set unit = "  " }
+    set b = buffer::new(128)
+    if b == 0 { return "" }
+    jenc_value(b, v, true, unit, 0)
+    set out = buffer::to_str(b)
+    buffer::free(b)
+    return out
+}
+
+// ── TOML reader ─────────────────────────────────────────────────
+//
+// The reader accepts the TOML 1.0 core: comments, bare and quoted keys, dotted
+// keys, tables, arrays of tables, basic/literal strings (single and multi-line),
+// integers in decimal/hex/octal/binary with underscores, floats, booleans,
+// arrays, inline tables, and dates. Dates have no base::Value counterpart, so
+// they decode as their source string; that is the one documented lossy case.
+
+fn tskip_inline: (s :&str, st :i64) {
+    set pos = pst_pos(st) mut
+    set len = pst_len(st)
+    while pos < len {
+        set c = bytes::get_str_u8(s, pos)
+        if c == 32 || c == 9 { set pos = pos + 1 } else { break }
+    }
+    pst_set_pos(st, pos)
+}
+
+fn tskip_all: (s :&str, st :i64) {
+    set pos = pst_pos(st) mut
+    set len = pst_len(st)
+    while pos < len {
+        set c = bytes::get_str_u8(s, pos)
+        if c == 32 || c == 9 || c == 13 || c == 10 {
+            set pos = pos + 1
+        } elif c == 35 {
+            while pos < len && bytes::get_str_u8(s, pos) != 10 { set pos = pos + 1 }
+        } else {
+            break
+        }
+    }
+    pst_set_pos(st, pos)
+}
+
+fn tpeek: (s :&str, st :i64) :i64 {
+    set pos = pst_pos(st)
+    if pos >= pst_len(st) { return -1 }
+    return bytes::get_str_u8(s, pos)
+}
+
+fn tis_bare_key: (c :i64) :bool {
+    if c >= 65 && c <= 90 { return true }
+    if c >= 97 && c <= 122 { return true }
+    if is_digit(c) { return true }
+    return c == 95 || c == 45
+}
+
+fn tkey: (s :&str, st :i64) :str {
+    tskip_inline(s, st)
+    set c = tpeek(s, st)
+    if c == 34 { return tstring_basic(s, st) }
+    if c == 39 { return tstring_literal(s, st) }
+    set pos = pst_pos(st) mut
+    set start = pos
+    set len = pst_len(st)
+    while pos < len && tis_bare_key(bytes::get_str_u8(s, pos)) {
+        set pos = pos + 1
+    }
+    if pos == start {
+        pst_fail(st, start)
+        return ""
+    }
+    pst_set_pos(st, pos)
+    return str::substr(s, start, pos - start)
+}
+
+fn tkey_path: (s :&str, st :i64) :i64 {
+    set out = base::array() mut
+    while true {
+        tskip_inline(s, st)
+        set key = tkey(s, st)
+        if pst_failed(st) { return out }
+        set out = base::array_push(out, base::string(key))
+        tskip_inline(s, st)
+        if tpeek(s, st) == 46 {
+            pst_set_pos(st, pst_pos(st) + 1)
+        } else {
+            return out
+        }
+    }
+    return out
+}
+
+// Walks a path of base::string values and returns the object named by it,
+// creating intermediate tables. `create_last` controls whether the final
+// segment is created too (headers) or must already exist (assignments under a
+// table).
+fn tdescend: (root :i64, path :i64, create_last :bool) :i64 {
+    set current = root mut
+    set n = base::array_len(path)
+    set i = 0 :i64 mut
+    while i < n {
+        set key = base::as_string(base::array_get(path, i))
+        if i == n - 1 && !create_last {
+            return current
+        }
+        if base::object_has(current, &key) && base::is_object(base::object_get(current, &key)) {
+            set current = base::object_get(current, &key)
+        } else {
+            set child = base::object()
+            set current = base::object_set(current, key, child)
+            set current = child
+        }
+        set i = i + 1
+    }
+    return current
+}
+
+fn tset_path: (root :i64, path :i64, value :i64) {
+    set n = base::array_len(path)
+    if n == 0 { return }
+    set parent = tdescend(root, path, false) mut
+    set key = base::as_string(base::array_get(path, n - 1))
+    set parent = base::object_set(parent, key, value)
+}
+
+fn tstring_basic: (s :&str, st :i64) :str {
+    set pos = pst_pos(st) mut
+if bytes::get_str_u8(s, pos) != 34 { pst_fail(st, pos)
+        return "" }
+    // Triple-quoted form.
+    if pos + 2 < pst_len(st) && bytes::get_str_u8(s, pos + 1) == 34 && bytes::get_str_u8(s, pos + 2) == 34 {
+        return tstring_multiline(s, st, true)
+    }
+    set pos = pos + 1
+    set out = buffer::new(32)
+    set len = pst_len(st)
+    set closed = false :bool mut
+    while pos < len {
+        set c = bytes::get_str_u8(s, pos)
+        if c == 34 {
+            set pos = pos + 1
+            set closed = true
+            break
+        }
+        if c == 92 {
+            set pos = pos + 1
+            if pos >= len { break }
+            set e = bytes::get_str_u8(s, pos)
+if e == 34 { buffer::push_u8(out, 34)
+                set pos = pos + 1 } elif e == 92 { buffer::push_u8(out, 92)
+                set pos = pos + 1 } elif e == 98 { buffer::push_u8(out, 8)
+                set pos = pos + 1 } elif e == 102 { buffer::push_u8(out, 12)
+                set pos = pos + 1 } elif e == 110 { buffer::push_u8(out, 10)
+                set pos = pos + 1 } elif e == 114 { buffer::push_u8(out, 13)
+                set pos = pos + 1 } elif e == 116 { buffer::push_u8(out, 9)
+                set pos = pos + 1 } elif e == 117 {
+if pos + 5 > len { pst_fail(st, pos)
+                    break }
+                set cp = read_hex4(s, pos + 1)
+if cp < 0 { pst_fail(st, pos)
+                    break }
+                push_utf8(out, cp)
+                set pos = pos + 5
+            } elif e == 85 {
+if pos + 9 > len { pst_fail(st, pos)
+                    break }
+                set cp = 0 :i64 mut
+                set i = 0 :i64 mut
+                while i < 8 {
+                    set d = hex_digit(bytes::get_str_u8(s, pos + 1 + i))
+if d < 0 { set cp = -1
+                        break }
+                    set cp = cp * 16 + d
+                    set i = i + 1
+                }
+if cp < 0 { pst_fail(st, pos)
+                    break }
+                push_utf8(out, cp)
+                set pos = pos + 9
+            } else {
+                pst_fail(st, pos)
+                break
+            }
+        } else {
+            if c == 10 || c == 13 {
+                pst_fail(st, pos)
+                break
+            }
+            buffer::push_u8(out, c)
+            set pos = pos + 1
+        }
+    }
+    if !closed { pst_fail(st, pos) }
+    set text = buffer::to_str(out)
+    buffer::free(out)
+    if pst_failed(st) { return "" }
+    pst_set_pos(st, pos)
+    return text
+}
+
+fn tstring_literal: (s :&str, st :i64) :str {
+    set pos = pst_pos(st) mut
+if bytes::get_str_u8(s, pos) != 39 { pst_fail(st, pos)
+        return "" }
+    if pos + 2 < pst_len(st) && bytes::get_str_u8(s, pos + 1) == 39 && bytes::get_str_u8(s, pos + 2) == 39 {
+        return tstring_multiline(s, st, false)
+    }
+    set pos = pos + 1
+    set start = pos
+    set len = pst_len(st)
+    while pos < len {
+        set c = bytes::get_str_u8(s, pos)
+        if c == 39 { break }
+if c == 10 || c == 13 { pst_fail(st, pos)
+            return "" }
+        set pos = pos + 1
+    }
+if pos >= len { pst_fail(st, pos)
+        return "" }
+    set text = str::substr(s, start, pos - start)
+    pst_set_pos(st, pos + 1)
+    return text
+}
+
+fn tstring_multiline: (s :&str, st :i64, escapes :bool) :str {
+    set pos = pst_pos(st) + 3 mut
+    set len = pst_len(st)
+    // A newline immediately after the opening delimiter is trimmed.
+    if pos < len && bytes::get_str_u8(s, pos) == 13 { set pos = pos + 1 }
+    if pos < len && bytes::get_str_u8(s, pos) == 10 { set pos = pos + 1 }
+    set out = buffer::new(64)
+    set closed = false :bool mut
+    while pos < len {
+        set c = bytes::get_str_u8(s, pos)
+        if c == 34 && pos + 2 < len && bytes::get_str_u8(s, pos + 1) == 34 && bytes::get_str_u8(s, pos + 2) == 34 {
+            set pos = pos + 3
+            set closed = true
+            break
+        }
+        if c == 39 && pos + 2 < len && bytes::get_str_u8(s, pos + 1) == 39 && bytes::get_str_u8(s, pos + 2) == 39 {
+            set pos = pos + 3
+            set closed = true
+            break
+        }
+        if escapes && c == 92 {
+            set pos = pos + 1
+            if pos >= len { break }
+            set e = bytes::get_str_u8(s, pos)
+            if e == 10 || e == 13 {
+                // Line-ending backslash: trim the newline and all following
+                // whitespace, which is TOML's continuation rule.
+                if e == 13 && pos + 1 < len && bytes::get_str_u8(s, pos + 1) == 10 { set pos = pos + 1 }
+                set pos = pos + 1
+                while pos < len {
+                    set w = bytes::get_str_u8(s, pos)
+                    if w == 32 || w == 9 || w == 10 || w == 13 { set pos = pos + 1 } else { break }
+                }
+} elif e == 34 { buffer::push_u8(out, 34)
+                set pos = pos + 1 } elif e == 92 { buffer::push_u8(out, 92)
+                set pos = pos + 1 } elif e == 98 { buffer::push_u8(out, 8)
+                set pos = pos + 1 } elif e == 102 { buffer::push_u8(out, 12)
+                set pos = pos + 1 } elif e == 110 { buffer::push_u8(out, 10)
+                set pos = pos + 1 } elif e == 114 { buffer::push_u8(out, 13)
+                set pos = pos + 1 } elif e == 116 { buffer::push_u8(out, 9)
+                set pos = pos + 1 } elif e == 117 {
+if pos + 5 > len { pst_fail(st, pos)
+                    break }
+                set cp = read_hex4(s, pos + 1)
+if cp < 0 { pst_fail(st, pos)
+                    break }
+                push_utf8(out, cp)
+                set pos = pos + 5
+            } elif e == 85 {
+if pos + 9 > len { pst_fail(st, pos)
+                    break }
+                set cp = 0 :i64 mut
+                set i = 0 :i64 mut
+                while i < 8 {
+                    set d = hex_digit(bytes::get_str_u8(s, pos + 1 + i))
+if d < 0 { set cp = -1
+                        break }
+                    set cp = cp * 16 + d
+                    set i = i + 1
+                }
+if cp < 0 { pst_fail(st, pos)
+                    break }
+                push_utf8(out, cp)
+                set pos = pos + 9
+            } else {
+                pst_fail(st, pos)
+                break
+            }
+        } else {
+            buffer::push_u8(out, c)
+            set pos = pos + 1
+        }
+    }
+    if !closed { pst_fail(st, pos) }
+    set text = buffer::to_str(out)
+    buffer::free(out)
+    if pst_failed(st) { return "" }
+    pst_set_pos(st, pos)
+    return text
+}
+
+fn tarray: (s :&str, st :i64) :i64 {
+    set out = base::array() mut
+    pst_set_pos(st, pst_pos(st) + 1)
+    tskip_all(s, st)
+    if tpeek(s, st) == 93 {
+        pst_set_pos(st, pst_pos(st) + 1)
+        return out
+    }
+    while true {
+        set v = tvalue(s, st)
+        if pst_failed(st) { return out }
+        set out = base::array_push(out, v)
+        tskip_all(s, st)
+        set c = tpeek(s, st)
+        if c == 44 {
+            pst_set_pos(st, pst_pos(st) + 1)
+            tskip_all(s, st)
+            if tpeek(s, st) == 93 {
+                pst_set_pos(st, pst_pos(st) + 1)
+                return out
+            }
+        } elif c == 93 {
+            pst_set_pos(st, pst_pos(st) + 1)
+            return out
+        } else {
+            pst_fail(st, pst_pos(st))
+            return out
+        }
+    }
+    return out
+}
+
+fn tinline_table: (s :&str, st :i64) :i64 {
+    set out = base::object()
+    pst_set_pos(st, pst_pos(st) + 1)
+    tskip_inline(s, st)
+    if tpeek(s, st) == 125 {
+        pst_set_pos(st, pst_pos(st) + 1)
+        return out
+    }
+    while true {
+        tskip_inline(s, st)
+        set path = tkey_path(s, st)
+        if pst_failed(st) { return out }
+        tskip_inline(s, st)
+        if tpeek(s, st) != 61 {
+            pst_fail(st, pst_pos(st))
+            return out
+        }
+        pst_set_pos(st, pst_pos(st) + 1)
+        set v = tvalue(s, st)
+        if pst_failed(st) { return out }
+        tset_path(out, path, v)
+        tskip_inline(s, st)
+        set c = tpeek(s, st)
+        if c == 44 {
+            pst_set_pos(st, pst_pos(st) + 1)
+            tskip_inline(s, st)
+            if tpeek(s, st) == 125 {
+                pst_set_pos(st, pst_pos(st) + 1)
+                return out
+            }
+        } elif c == 125 {
+            pst_set_pos(st, pst_pos(st) + 1)
+            return out
+        } else {
+            pst_fail(st, pst_pos(st))
+            return out
+        }
+    }
+    return out
+}
+
+fn tscalar: (s :&str, st :i64) :i64 {
+    set pos = pst_pos(st) mut
+    set len = pst_len(st)
+    set start = pos
+    while pos < len {
+        set c = bytes::get_str_u8(s, pos)
+        if c == 32 || c == 9 || c == 10 || c == 13 || c == 35 || c == 44 || c == 93 || c == 125 {
+            break
+        }
+        set pos = pos + 1
+    }
+    if pos == start {
+        pst_fail(st, start)
+        return base::null()
+    }
+    set tok = str::substr(s, start, pos - start)
+    pst_set_pos(st, pos)
+    if tok == "true" { return base::bool(true) }
+    if tok == "false" { return base::bool(false) }
+    if tok == "inf" || tok == "+inf" {
+        set z = 0.0 :f64 mut
+        return base::float(1.0 / z)
+    }
+    if tok == "-inf" {
+        set z = 0.0 :f64 mut
+        return base::float(0.0 - 1.0 / z)
+    }
+    if tok == "nan" || tok == "+nan" || tok == "-nan" {
+        set z = 0.0 :f64 mut
+        return base::float(z / z)
+    }
+    if tlooks_like_date(tok) {
+        return base::string(tok)
+    }
+    if bytes::str_len(tok) > 2 && bytes::get_str_u8(tok, 0) == 48 {
+        set marker = bytes::get_str_u8(tok, 1)
+        if marker == 120 || marker == 88 {
+            set hexpart = str::substr(tok, 2, bytes::str_len(tok) - 2)
+            return base::int(parse_u64_token(hexpart))
+        }
+        if marker == 111 || marker == 79 {
+            return base::int(tparse_base(str::substr(tok, 2, bytes::str_len(tok) - 2), 8))
+        }
+        if marker == 98 || marker == 66 {
+            return base::int(tparse_base(str::substr(tok, 2, bytes::str_len(tok) - 2), 2))
+        }
+    }
+    if toml_number_is_float(tok) {
+        return base::float(parse_f64_token(tok))
+    }
+    if !toml_number_ok(tok) {
+        pst_fail(st, start)
+        return base::null()
+    }
+    set parsed = 0 :i64 mut
+    if !parse_dec_i64_checked(tok, &mut parsed) {
+        pst_fail(st, start)
+        return base::null()
+    }
+    return base::int(parsed)
+}
+
+fn tparse_base: (tok :&str, base :i64) :i64 {
+    set n = bytes::str_len(tok)
+    set acc = 0 :i64 mut
+    set i = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(tok, i)
+        if c != 95 {
+            set d = hex_digit(c)
+            if d < 0 || d >= base { return 0 }
+            set acc = acc * base + d
+        }
+        set i = i + 1
+    }
+    return acc
+}
+
+fn toml_number_is_float: (tok :&str) :bool {
+    set n = bytes::str_len(tok)
+    set i = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(tok, i)
+        if c == 46 || c == 101 || c == 69 { return true }
+        set i = i + 1
+    }
+    return false
+}
+
+fn toml_number_ok: (tok :&str) :bool {
+    set n = bytes::str_len(tok)
+    if n == 0 { return false }
+    set i = 0 :i64 mut
+    if bytes::get_str_u8(tok, i) == 45 || bytes::get_str_u8(tok, i) == 43 {
+        set i = i + 1
+    }
+    set digits = 0 :i64 mut
+    while i < n {
+        set c = bytes::get_str_u8(tok, i)
+        if is_digit(c) || c == 95 {
+            if is_digit(c) { set digits = digits + 1 }
+            set i = i + 1
+        } else {
+            return false
+        }
+    }
+    return digits > 0
+}
+
+fn tlooks_like_date: (tok :&str) :bool {
+    set n = bytes::str_len(tok)
+    if n < 8 { return false }
+    // A digit pair followed by '-' or ':' is a date/time, not arithmetic.
+    set i = 0 :i64 mut
+    while i + 2 < n {
+        set c = bytes::get_str_u8(tok, i)
+        if is_digit(c) && is_digit(bytes::get_str_u8(tok, i + 1)) {
+            set d = bytes::get_str_u8(tok, i + 2)
+            if d == 45 || d == 58 { return true }
+        }
+        set i = i + 1
+    }
+    return false
+}
+
+fn tvalue: (s :&str, st :i64) :i64 {
+    if !pst_enter(st) { return base::null() }
+    tskip_inline(s, st)
+    set c = tpeek(s, st)
+    set v = base::null() :i64 mut
+    if c == 34 {
+        set text = tstring_basic(s, st)
+        if !pst_failed(st) { set v = base::string(text) }
+    } elif c == 39 {
+        set text = tstring_literal(s, st)
+        if !pst_failed(st) { set v = base::string(text) }
+    } elif c == 91 {
+        set v = tarray(s, st)
+    } elif c == 123 {
+        set v = tinline_table(s, st)
+    } else {
+        set v = tscalar(s, st)
+    }
+    pst_leave(st)
+    return v
+}
+
+fn ttable_header: (s :&str, st :i64, root :i64) :i64 {
+    set is_array = false :bool mut
+    pst_set_pos(st, pst_pos(st) + 1)
+    if tpeek(s, st) == 91 {
+        set is_array = true
+        pst_set_pos(st, pst_pos(st) + 1)
+    }
+    set path = tkey_path(s, st)
+    if pst_failed(st) { return root }
+    tskip_inline(s, st)
+    if tpeek(s, st) == 93 {
+        pst_set_pos(st, pst_pos(st) + 1)
+        if is_array {
+            if tpeek(s, st) != 93 {
+                pst_fail(st, pst_pos(st))
+                return root
+            }
+            pst_set_pos(st, pst_pos(st) + 1)
+        }
+    } else {
+        pst_fail(st, pst_pos(st))
+        return root
+    }
+    set n = base::array_len(path)
+    if n == 0 {
+        pst_fail(st, pst_pos(st))
+        return root
+    }
+    set parent = tdescend(root, path, false) mut
+    set key = base::as_string(base::array_get(path, n - 1))
+    if is_array {
+        if !base::object_has(parent, &key) {
+            set arr = base::array() mut
+            set parent = base::object_set(parent, key, arr)
+        }
+        set arr = base::object_get(parent, &key) mut
+        if !base::is_array(arr) {
+            pst_fail(st, pst_pos(st))
+            return root
+        }
+        set item = base::object()
+        set arr = base::array_push(arr, item)
+        return item
+    }
+    if base::object_has(parent, &key) && base::is_object(base::object_get(parent, &key)) {
+        return base::object_get(parent, &key)
+    }
+    set table = base::object()
+    set parent = base::object_set(parent, key, table)
+    return table
+}
+
+pub fn toml_decode: (s :str) :i64 {
+    set st = pst_new(s)
+    if st == 0 { return base::error("TOML: out of memory") }
+    set root = base::object()
+    set current = root mut
+    while true {
+        tskip_all(s, st)
+        if pst_failed(st) { break }
+        set pos = pst_pos(st)
+        if pos >= pst_len(st) { break }
+        set c = bytes::get_str_u8(s, pos)
+        if c == 91 {
+            set current = ttable_header(s, st, root)
+            if pst_failed(st) { break }
+        } else {
+            set path = tkey_path(s, st)
+            if pst_failed(st) { break }
+            tskip_inline(s, st)
+            if tpeek(s, st) != 61 {
+                pst_fail(st, pst_pos(st))
+                break
+            }
+            pst_set_pos(st, pst_pos(st) + 1)
+            set v = tvalue(s, st)
+            if pst_failed(st) { break }
+            tset_path(current, path, v)
+            tskip_inline(s, st)
+            if tpeek(s, st) == 35 {
+                while pst_pos(st) < pst_len(st) && bytes::get_str_u8(s, pst_pos(st)) != 10 {
+                    pst_set_pos(st, pst_pos(st) + 1)
+                }
+            }
+        }
+    }
+    if pst_failed(st) {
+        set err = pst_error(s, st, "invalid TOML")
+        pst_free(st)
+        return err
+    }
+    pst_free(st)
+    return root
+}
+
+// ── TOML writer ─────────────────────────────────────────────────
+
+fn tkey_bare: (key :&str) :bool {
+    set n = bytes::str_len(key)
+    if n == 0 { return false }
+    set i = 0 :i64 mut
+    while i < n {
+        if !tis_bare_key(bytes::get_str_u8(key, i)) { return false }
+        set i = i + 1
+    }
+    return true
+}
+
+fn tenc_key: (b :i64, key :&str) {
+    if tkey_bare(key) {
+        buffer::push_str(b, key)
+    } else {
+        jenc_string(b, key)
+    }
+}
+
+fn tenc_path: (b :i64, path :&str, key :&str) {
+    if bytes::str_len(path) > 0 {
+        buffer::push_str(b, path)
+        buffer::push_u8(b, 46)
+    }
+    tenc_key(b, key)
+}
+
+fn tfloat_text: (v :f64) :str {
+    if v != v { return "nan" }
+    if v > 1.7976931348623157e308 { return "inf" }
+    if v < 0.0 - 1.7976931348623157e308 { return "-inf" }
+    set text = str::from::f64(v)
+    if str::contains(text, ".") || str::contains(text, "e") || str::contains(text, "E") {
+        return text
+    }
+    return text + ".0"
+}
+
+fn tenc_value: (b :i64, v :i64) {
+    set k = base::kind(v)
+    if k == base::K_NULL() {
+        buffer::push_str(b, "\"\"")
+        return
+    }
+    if k == base::K_BOOL() {
+        if base::as_bool(v) { buffer::push_str(b, "true") } else { buffer::push_str(b, "false") }
+        return
+    }
+    if k == base::K_INT() {
+        buffer::push_i64(b, base::as_int(v))
+        return
+    }
+    if k == base::K_FLOAT() {
+        buffer::push_str(b, tfloat_text(base::as_float(v)))
+        return
+    }
+    if k == base::K_STRING() || k == base::K_ERROR() {
+        jenc_string(b, base::as_string(v))
+        return
+    }
+    if k == base::K_BYTES() {
+        buffer::push_u8(b, 91)
+        set n = base::as_bytes_len(v)
+        set i = 0 :i64 mut
+        while i < n {
+            if i > 0 { buffer::push_str(b, ", ") }
+            buffer::push_i64(b, bytes::get_u8(base::as_bytes_ptr(v), i))
+            set i = i + 1
+        }
+        buffer::push_u8(b, 93)
+        return
+    }
+    if k == base::K_ARRAY() {
+        buffer::push_u8(b, 91)
+        set n = base::array_len(v)
+        set i = 0 :i64 mut
+        while i < n {
+            if i > 0 { buffer::push_str(b, ", ") }
+            tenc_value(b, base::array_get(v, i))
+            set i = i + 1
+        }
+        buffer::push_u8(b, 93)
+        return
+    }
+    if k == base::K_OBJECT() {
+        buffer::push_u8(b, 123)
+        set n = base::object_len(v)
+        set i = 0 :i64 mut
+        while i < n {
+            if i > 0 { buffer::push_str(b, ", ") }
+            tenc_key(b, base::object_key_at(v, i))
+            buffer::push_str(b, " = ")
+            tenc_value(b, base::object_value_at(v, i))
+            set i = i + 1
+        }
+        buffer::push_u8(b, 125)
+        return
+    }
+    buffer::push_str(b, "\"\"")
+}
+
+fn tis_array_of_tables: (v :i64) :bool {
+    if !base::is_array(v) { return false }
+    set n = base::array_len(v)
+    if n == 0 { return false }
+    set i = 0 :i64 mut
+    while i < n {
+        if !base::is_object(base::array_get(v, i)) { return false }
+        set i = i + 1
+    }
+    return true
+}
+
+fn tenc_table: (b :i64, obj :i64, path :str) {
+    set n = base::object_len(obj)
+    set i = 0 :i64 mut
+    // Scalars and arrays first: TOML requires a table's own keys before the
+    // sub-tables that follow it.
+    while i < n {
+        set key = base::object_key_at(obj, i)
+        set v = base::object_value_at(obj, i)
+        if !base::is_object(v) && !tis_array_of_tables(v) {
+            tenc_key(b, key)
+            buffer::push_str(b, " = ")
+            tenc_value(b, v)
+            buffer::push_u8(b, 10)
+        }
+        set i = i + 1
+    }
+    set i = 0
+    while i < n {
+        set key = base::object_key_at(obj, i)
+        set v = base::object_value_at(obj, i)
+        if base::is_object(v) {
+            buffer::push_u8(b, 10)
+            buffer::push_u8(b, 91)
+            tenc_path(b, path, key)
+            buffer::push_str(b, "]\n")
+            set child_path = key :str mut
+            if bytes::str_len(path) > 0 { set child_path = path + "." + key }
+            tenc_table(b, v, child_path)
+        } elif tis_array_of_tables(v) {
+            set child_path = key :str mut
+            if bytes::str_len(path) > 0 { set child_path = path + "." + key }
+            set count = base::array_len(v)
+            set j = 0 :i64 mut
+            while j < count {
+                buffer::push_u8(b, 10)
+                buffer::push_str(b, "[[")
+                tenc_path(b, path, key)
+                buffer::push_str(b, "]]\n")
+                tenc_table(b, base::array_get(v, j), child_path)
+                set j = j + 1
+            }
+        }
+        set i = i + 1
+    }
+}
+
+pub fn toml_encode: (v :i64) :str {
+    set b = buffer::new(128)
+    if b == 0 { return "" }
+    if base::is_object(v) {
+        tenc_table(b, v, "")
+    } else {
+        tenc_value(b, v)
+        buffer::push_u8(b, 10)
+    }
+    set out = buffer::to_str(b)
+    buffer::free(b)
+    return out
+}
+
+// ── Binary format ───────────────────────────────────────────────
+//
+// Encoding, version 1:
+//
+//   tag 0x00  null
+//   tag 0x01  false
+//   tag 0x02  true
+//   tag 0x03  integer, 8 bytes little-endian two's complement
+//   tag 0x04  float, IEEE-754 binary64, 8 bytes little-endian
+//   tag 0x05  string, u32 length + UTF-8 bytes
+//   tag 0x06  array, u32 count + values
+//   tag 0x07  object, u32 count + (string key, value) pairs
+//   tag 0x08  bytes, u32 length + raw bytes
+//   tag 0x09  error, encoded like a string
+//
+// Lengths are unsigned 32-bit little-endian. There is no alignment, and the
+// representation is canonical: one value has exactly one encoding. Unknown
+// tags, truncated input and excessive nesting are decode errors.
+
+cons BIN_NULL = 0
+cons BIN_FALSE = 1
+cons BIN_TRUE = 2
+cons BIN_INT = 3
+cons BIN_FLOAT = 4
+cons BIN_STRING = 5
+cons BIN_ARRAY = 6
+cons BIN_OBJECT = 7
+cons BIN_BYTES = 8
+cons BIN_ERROR = 9
+
+fn bput_u32: (b :i64, value :i64) {
+    buffer::push_u8(b, value & 255)
+    buffer::push_u8(b, (value >> 8) & 255)
+    buffer::push_u8(b, (value >> 16) & 255)
+    buffer::push_u8(b, (value >> 24) & 255)
+}
+
+fn bput_i64: (b :i64, value :i64) {
+    set i = 0 :i64 mut
+    while i < 8 {
+        set shift = i * 8
+        buffer::push_u8(b, (value >> shift) & 255)
+        set i = i + 1
+    }
+}
+
+fn bput_bytes: (b :i64, data :&ptr, len :i64) {
+    set i = 0 :i64 mut
+    while i < len {
+        buffer::push_u8(b, bytes::get_u8(data, i))
+        set i = i + 1
+    }
+}
+
+fn bin_value: (b :i64, v :i64) {
+    set k = base::kind(v)
+    if k == base::K_NULL() {
+        buffer::push_u8(b, BIN_NULL)
+        return
+    }
+    if k == base::K_BOOL() {
+        if base::as_bool(v) { buffer::push_u8(b, BIN_TRUE) } else { buffer::push_u8(b, BIN_FALSE) }
+        return
+    }
+    if k == base::K_INT() {
+        buffer::push_u8(b, BIN_INT)
+        bput_i64(b, base::as_int(v))
+        return
+    }
+    if k == base::K_FLOAT() {
+        buffer::push_u8(b, BIN_FLOAT)
+        bput_i64(b, bits_of_float(base::as_float(v)))
+        return
+    }
+    if k == base::K_STRING() {
+        set text = base::as_string(v)
+        buffer::push_u8(b, BIN_STRING)
+        bput_u32(b, bytes::str_len(text))
+        buffer::push_str(b, text)
+        return
+    }
+    if k == base::K_ERROR() {
+        set text = base::as_string(v)
+        buffer::push_u8(b, BIN_ERROR)
+        bput_u32(b, bytes::str_len(text))
+        buffer::push_str(b, text)
+        return
+    }
+    if k == base::K_BYTES() {
+        set len = base::as_bytes_len(v)
+        buffer::push_u8(b, BIN_BYTES)
+        bput_u32(b, len)
+        bput_bytes(b, base::as_bytes_ptr(v), len)
+        return
+    }
+    if k == base::K_ARRAY() {
+        set n = base::array_len(v)
+        buffer::push_u8(b, BIN_ARRAY)
+        bput_u32(b, n)
+        set i = 0 :i64 mut
+        while i < n {
+            bin_value(b, base::array_get(v, i))
+            set i = i + 1
+        }
+        return
+    }
+    if k == base::K_OBJECT() {
+        set n = base::object_len(v)
+        buffer::push_u8(b, BIN_OBJECT)
+        bput_u32(b, n)
+        set i = 0 :i64 mut
+        while i < n {
+            set key = base::object_key_at(v, i)
+            bput_u32(b, bytes::str_len(key))
+            buffer::push_str(b, key)
+            bin_value(b, base::object_value_at(v, i))
+            set i = i + 1
+        }
+        return
+    }
+    buffer::push_u8(b, BIN_NULL)
+}
+
+fn bits_of_float: (v :f64) :i64 {
+    return bits::i64(v)
+}
+
+pub fn bin_encode: (v :i64) :i64 {
+    set b = buffer::new(128)
+    if b == 0 { return base::error("binary: out of memory") }
+    bin_value(b, v)
+    set out = base::blob(buffer::data(b), buffer::len(b))
+    buffer::free(b)
+    return out
+}
+
+pub fn bin_encode_to_ptr: (v :i64, out :&mut ptr, out_len :&mut i64) {
+    set b = buffer::new(128)
+    if b == 0 {
+        set *out = 0
+        set *out_len = 0
+        return
+    }
+    bin_value(b, v)
+    set n = buffer::len(b)
+    set raw = bytes::alloc(n)
+    if raw == 0 {
+        set *out = 0
+        set *out_len = 0
+        buffer::free(b)
+        return
+    }
+    set src = buffer::data(b)
+    set i = 0 :i64 mut
+    while i < n {
+        bytes::set_u8(raw, i, bytes::get_u8(src, i))
+        set i = i + 1
+    }
+    set *out = raw
+    set *out_len = n
+    buffer::free(b)
+}
+
+fn bneed: (st :i64, n :i64) :bool {
+    set pos = pst_pos(st)
+    if pos + n > pst_len(st) {
+        pst_fail(st, pos)
+        return false
+    }
+    return true
+}
+
+fn bget_u8: (data :&ptr, st :i64) :i64 {
+    if !bneed(st, 1) { return 0 }
+    set pos = pst_pos(st)
+    set v = bytes::get_u8(data, pos)
+    pst_set_pos(st, pos + 1)
+    return v
+}
+
+fn bget_u32: (data :&ptr, st :i64) :i64 {
+    if !bneed(st, 4) { return 0 }
+    set pos = pst_pos(st)
+    set b0 = bytes::get_u8(data, pos)
+    set b1 = bytes::get_u8(data, pos + 1)
+    set b2 = bytes::get_u8(data, pos + 2)
+    set b3 = bytes::get_u8(data, pos + 3)
+    pst_set_pos(st, pos + 4)
+    return b0 + b1 * 256 + b2 * 65536 + b3 * 16777216
+}
+
+fn bget_i64: (data :&ptr, st :i64) :i64 {
+    if !bneed(st, 8) { return 0 }
+    set pos = pst_pos(st)
+    set acc = 0 :i64 mut
+    set i = 0 :i64 mut
+    while i < 8 {
+        set byte = bytes::get_u8(data, pos + i)
+        set shift = i * 8
+        set part = byte << shift
+        set acc = acc + part
+        set i = i + 1
+    }
+    pst_set_pos(st, pos + 8)
+    return acc
+}
+
+fn bget_str: (data :&ptr, st :i64) :str {
+    set n = bget_u32(data, st)
+    if pst_failed(st) { return "" }
+    if !bneed(st, n) { return "" }
+    set pos = pst_pos(st)
+    set p = pal::ptr_add(data, pos)
+    set text = bytes::to_str(p, n)
+    pst_set_pos(st, pos + n)
+    return text
+}
+
+fn bin_read: (data :&ptr, st :i64) :i64 {
+    if !pst_enter(st) { return base::null() }
+    set tag = bget_u8(data, st)
+    if pst_failed(st) {
+        pst_leave(st)
+        return base::null()
+    }
+    set v = base::null() :i64 mut
+    if tag == BIN_NULL {
+        set v = base::null()
+    } elif tag == BIN_FALSE {
+        set v = base::bool(false)
+    } elif tag == BIN_TRUE {
+        set v = base::bool(true)
+    } elif tag == BIN_INT {
+        set v = base::int(bget_i64(data, st))
+    } elif tag == BIN_FLOAT {
+        set raw = bget_i64(data, st)
+        set v = base::float(bits::f64(raw))
+    } elif tag == BIN_STRING {
+        set v = base::string(bget_str(data, st))
+    } elif tag == BIN_ERROR {
+        set v = base::error(bget_str(data, st))
+    } elif tag == BIN_BYTES {
+        set n = bget_u32(data, st)
+        if !pst_failed(st) && bneed(st, n) {
+            set pos = pst_pos(st)
+            set p = pal::ptr_add(data, pos)
+            set v = base::blob(p, n)
+            pst_set_pos(st, pos + n)
+        }
+    } elif tag == BIN_ARRAY {
+        set n = bget_u32(data, st)
+        set arr = base::array() mut
+        set i = 0 :i64 mut
+        while i < n && !pst_failed(st) {
+            set item = bin_read(data, st)
+            if !pst_failed(st) { set arr = base::array_push(arr, item) }
+            set i = i + 1
+        }
+        set v = arr
+    } elif tag == BIN_OBJECT {
+        set n = bget_u32(data, st)
+        set obj = base::object() mut
+        set i = 0 :i64 mut
+        while i < n && !pst_failed(st) {
+            set key = bget_str(data, st)
+            if !pst_failed(st) {
+                set item = bin_read(data, st)
+                if !pst_failed(st) { set obj = base::object_set(obj, key, item) }
+            }
+            set i = i + 1
+        }
+        set v = obj
+    } else {
+        pst_fail(st, pst_pos(st) - 1)
+        set v = base::null()
+    }
+    pst_leave(st)
+    return v
+}
+
+pub fn bin_decode: (data :&ptr, len :i64) :i64 {
+    set st = bytes::alloc(PST_SIZE)
+    if st == 0 { return base::error("binary: out of memory") }
+    pal::write_u64(st, 0)
+    pal::write_u64(pal::ptr_add(st, PST_LEN), len)
+    pal::write_u64(pal::ptr_add(st, PST_ERR), 0)
+    pal::write_u64(pal::ptr_add(st, PST_ERRPOS), 0)
+    pal::write_u64(pal::ptr_add(st, PST_DEPTH), 0)
+    set state = st :i64
+    set v = bin_read(data, state)
+    if !pst_failed(state) && pst_pos(state) != len {
+        pst_fail(state, pst_pos(state))
+    }
+    if pst_failed(state) {
+        set pos = pal::read_u64(pal::ptr_add(st, PST_ERRPOS))
+        set msg = "invalid binary value at byte " + str::from::i64(pos)
+        bytes::free(st)
+        return base::error(msg)
+    }
+    bytes::free(st)
+    return v
+}

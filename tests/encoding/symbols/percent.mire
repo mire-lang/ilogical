@@ -1,0 +1,56 @@
+// Per-symbol suite: ilogical::encoding percent.
+//
+// Cases: success (unreserved characters survive, everything else becomes
+// uppercase %XX), limit (empty input, a lone '%'), anomaly (a stray or
+// truncated escape is preserved literally instead of consuming the next
+// character).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn percent_success_encode: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("encoding/percent/space", encoding::percent_encode("hello world"), "hello%20world") { set ok = false }
+    if !use! harness::check_str("encoding/percent/reserved", encoding::percent_encode("a+b=c"), "a%2Bb%3Dc") { set ok = false }
+    if !use! harness::check_str("encoding/percent/unreserved", encoding::percent_encode("AZaz09-_.~"), "AZaz09-_.~") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn percent_success_decode: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("encoding/percent/decode_space", encoding::percent_decode("hello%20world"), "hello world") { set ok = false }
+    if !use! harness::check_str("encoding/percent/decode_reserved", encoding::percent_decode("a%2Bb%3Dc"), "a+b=c") { set ok = false }
+    if !use! harness::check_str("encoding/percent/decode_lower_hex", encoding::percent_decode("%2b"), "+") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn percent_success_utf8_roundtrip: () :bool {
+    set encoded = encoding::percent_encode("añb")
+    set decoded = encoding::percent_decode(encoded)
+    set ok = true :bool mut
+    if !use! harness::check_str("encoding/percent/utf8_encoded", encoded, "a%C3%B1b") { set ok = false }
+    if !use! harness::check_str("encoding/percent/utf8_roundtrip", decoded, "añb") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn percent_limit_empty: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("encoding/percent/encode_empty", encoding::percent_encode(""), "") { set ok = false }
+    if !use! harness::check_str("encoding/percent/decode_empty", encoding::percent_decode(""), "") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn percent_anomaly_stray_and_truncated: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("encoding/percent/stray", encoding::percent_decode("100%"), "100%") { set ok = false }
+    if !use! harness::check_str("encoding/percent/truncated", encoding::percent_decode("%2"), "%2") { set ok = false }
+    if !use! harness::check_str("encoding/percent/invalid", encoding::percent_decode("%zz"), "%zz") { set ok = false }
+    use! harness::anomaly("encoding", "percent/stray", "100%", "100%", encoding::percent_decode("100%"), encoding::percent_decode("100%") == "100%")
+    return ok
+}

@@ -1,0 +1,53 @@
+// Per-symbol suite: ilogical::url resolve.
+//
+// Cases: success (absolute path, relative path, dot segments, query-only and
+// fragment-only references), limit (empty reference returns the base, and a
+// chain of `..` never climbs above the root), anomaly (a relative reference
+// with no base path must gain a slash, not concatenate onto the host).
+
+load ilogical
+load! /tests/_support/harness
+
+@[test]
+pub fn url_resolve_success_relative_path: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("url/resolve/dir", url::resolve_str("http://example.com/base/", "path/to/resource"), "http://example.com/base/path/to/resource") { set ok = false }
+    if !use! harness::check_str("url/resolve/file", url::resolve_str("http://example.com/a/b", "c"), "http://example.com/a/c") { set ok = false }
+    if !use! harness::check_str("url/resolve/dotdot", url::resolve_str("http://example.com/a/b", "../c"), "http://example.com/c") { set ok = false }
+    if !use! harness::check_str("url/resolve/absolute_path", url::resolve_str("http://example.com/a/b", "/root"), "http://example.com/root") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_resolve_success_query_and_fragment: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("url/resolve/query_only", url::resolve_str("http://example.com/a?x=1", "?y=2"), "http://example.com/a?y=2") { set ok = false }
+    if !use! harness::check_str("url/resolve/fragment_only", url::resolve_str("http://example.com/a?x=1#old", "#new"), "http://example.com/a?x=1#new") { set ok = false }
+    if !use! harness::check_str("url/resolve/absolute", url::resolve_str("http://example.com/a", "https://other.example/b"), "https://other.example/b") { set ok = false }
+    if !use! harness::check_str("url/resolve/protocol_relative", url::resolve_str("http://example.com/a", "//cdn.example/b"), "http://cdn.example/b") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_resolve_success_object_api: () :bool {
+    set base_url = url::parse("http://example.com/base/")
+    set relative = url::parse("path/to/resource")
+    set resolved = url::resolve(base_url, relative)
+    return use! harness::check_str("url/resolve/object_api", url::to_string(resolved), "http://example.com/base/path/to/resource")
+}
+
+@[test]
+pub fn url_resolve_limit_empty_and_root: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("url/resolve/empty_ref", url::resolve_str("http://example.com/a", ""), "http://example.com/a") { set ok = false }
+    if !use! harness::check_str("url/resolve/above_root", url::resolve_str("http://example.com/a/b", "../../../../x"), "http://example.com/x") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn url_resolve_anomaly_empty_base_path: () :bool {
+    set resolved = url::resolve_str("http://example.com", "x")
+    set ok = use! harness::check_str("url/resolve/no_leading_slash", resolved, "http://example.com/x")
+    use! harness::anomaly("url", "resolve/empty_base_path", "http://example.com + x", "http://example.com/x", resolved, resolved == "http://example.com/x")
+    return ok
+}

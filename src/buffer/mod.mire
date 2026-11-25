@@ -1,0 +1,174 @@
+module buffer
+
+// ilogical::buffer — a growable byte buffer.
+//
+// The codecs in this package build output one byte at a time: JSON escaping,
+// percent-encoding, TOML keys, MessagePack frames. Rebuilding a `str` with `+`
+// for every byte is quadratic and allocates a managed string per step, so the
+// codecs share this small builder instead.
+//
+// The handle is an i64 pointing at a 24-byte record:
+//
+//   offset 0  data pointer (malloc)
+//   offset 8  length in bytes
+//   offset 16 capacity in bytes
+//
+// The data pointer is never moved by the managed allocator: growth allocates a
+// new malloc block, copies, and frees the old one. `to_str` copies the result
+// into a managed string, which is the only place the two worlds meet.
+
+load mire::bytes
+load mire::str
+load mire::aux::pal
+
+cons BUF_DATA = 0
+cons BUF_LEN = 8
+cons BUF_CAP = 16
+cons BUF_SIZE = 24
+
+pub fn new: (initial :i64) :i64 {
+    set cap = initial :i64 mut
+    if cap < 16 { set cap = 16 }
+    set rec = bytes::alloc(BUF_SIZE)
+    if rec == 0 { return 0 }
+    set data = bytes::alloc(cap)
+    if data == 0 {
+        bytes::free(rec)
+        return 0
+    }
+    pal::write_u64(rec, data :i64)
+    pal::write_u64(pal::ptr_add(rec, BUF_LEN), 0)
+    pal::write_u64(pal::ptr_add(rec, BUF_CAP), cap)
+    return rec :i64
+}
+
+pub fn len: (b :i64) :i64 {
+    set rec = b :ptr
+    return pal::read_u64(pal::ptr_add(rec, BUF_LEN))
+}
+
+pub fn data: (b :i64) :ptr {
+    set rec = b :ptr
+    set raw = pal::read_u64(rec)
+    return raw :ptr
+}
+
+pub fn reserve: (b :i64, extra :i64) {
+    set rec = b :ptr
+    set length = pal::read_u64(pal::ptr_add(rec, BUF_LEN))
+    set cap = pal::read_u64(pal::ptr_add(rec, BUF_CAP))
+    set needed = length + extra
+    if needed <= cap { return }
+    set new_cap = cap * 2 :i64 mut
+    while new_cap < needed { set new_cap = new_cap * 2 }
+    set old_raw = pal::read_u64(rec)
+    set old_data = old_raw :ptr
+    set new_data = bytes::alloc(new_cap)
+    if new_data == 0 { return }
+    set i = 0 :i64 mut
+    while i < length {
+        set byte = bytes::get_u8(old_data, i)
+        bytes::set_u8(new_data, i, byte)
+        set i = i + 1
+    }
+    bytes::free(old_data)
+    pal::write_u64(rec, new_data :i64)
+    pal::write_u64(pal::ptr_add(rec, BUF_CAP), new_cap)
+}
+
+pub fn push_u8: (b :i64, byte :i64) {
+    reserve(b, 1)
+    set rec = b :ptr
+    set length = pal::read_u64(pal::ptr_add(rec, BUF_LEN))
+    set raw_i = pal::read_u64(rec)
+    set raw = raw_i :ptr
+    bytes::set_u8(raw, length, byte & 255)
+    pal::write_u64(pal::ptr_add(rec, BUF_LEN), length + 1)
+}
+
+pub fn push_str: (b :i64, s :&str) {
+    set n = bytes::str_len(s)
+    reserve(b, n)
+    set rec = b :ptr
+    set length = pal::read_u64(pal::ptr_add(rec, BUF_LEN))
+    set raw_i = pal::read_u64(rec)
+    set raw = raw_i :ptr
+    bytes::write_str_at(raw, length, s, n)
+    pal::write_u64(pal::ptr_add(rec, BUF_LEN), length + n)
+}
+
+pub fn push_i64: (b :i64, value :i64) {
+    if value == 0 {
+        push_u8(b, 48)
+        return
+    }
+    if value < 0 {
+        push_u8(b, 45)
+    }
+    set n = value :i64 mut
+    if n < 0 {
+        // Negating i64::MIN overflows, so emit the sign and walk the
+        // magnitude as unsigned until the last digit.
+        set u = 0 :i64 mut
+        set carry = 0 :i64 mut
+        set u = 0 - n
+        set tmp = u :i64 mut
+        set digits = 0 :i64 mut
+while tmp > 0 { set digits = digits + 1
+            set tmp = tmp / 10 }
+        set pow = 1 :i64 mut
+        set k = 1 :i64 mut
+while k < digits { set pow = pow * 10
+            set k = k + 1 }
+        while pow > 0 {
+            set d = u / pow
+            set u = u - d * pow
+            push_u8(b, 48 + d)
+            set pow = pow / 10
+        }
+        return
+    }
+    set tmp = n :i64 mut
+    set digits = 0 :i64 mut
+while tmp > 0 { set digits = digits + 1
+        set tmp = tmp / 10 }
+    set pow = 1 :i64 mut
+    set k = 1 :i64 mut
+while k < digits { set pow = pow * 10
+        set k = k + 1 }
+    while pow > 0 {
+        set d = n / pow
+        set n = n - d * pow
+        push_u8(b, 48 + d)
+        set pow = pow / 10
+    }
+}
+
+pub fn push_f64: (b :i64, value :f64) {
+    // The runtime formatter is the shortest round-tripping representation and
+    // is already what base::to_string uses, so the codecs do not grow their
+    // own float printer.
+    push_str(b, str::from::f64(value))
+}
+
+pub fn to_str: (b :i64) :str {
+    set rec = b :ptr
+    set length = pal::read_u64(pal::ptr_add(rec, BUF_LEN))
+    set raw_i = pal::read_u64(rec)
+    set raw = raw_i :ptr
+    return bytes::to_str(raw, length)
+}
+
+pub fn clear: (b :i64) {
+    set rec = b :ptr
+    pal::write_u64(pal::ptr_add(rec, BUF_LEN), 0)
+}
+
+pub fn free: (b :i64) {
+    set rec = b :ptr
+    if rec == 0 { return }
+    set raw_i = pal::read_u64(rec)
+    set raw = raw_i :ptr
+    if raw != 0 { bytes::free(raw) }
+    bytes::free(rec)
+}

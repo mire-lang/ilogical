@@ -1,0 +1,52 @@
+// Per-symbol suite: ilogical::web methods.
+//
+// Cases: success (each method round-trips through name/from_str), limit
+// (unknown names and codes), anomaly (lookup is exact and case-sensitive, so
+// "get" is not recognized; that is logged because HTTP method tokens are
+// uppercase by definition).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn web_methods_success_roundtrip: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_i64("web/method/get/roundtrip", web::method_from_str(web::method_name(web::METHOD_GET())), web::METHOD_GET()) { set ok = false }
+    if !use! harness::check_i64("web/method/post/roundtrip", web::method_from_str(web::method_name(web::METHOD_POST())), web::METHOD_POST()) { set ok = false }
+    if !use! harness::check_i64("web/method/put/roundtrip", web::method_from_str(web::method_name(web::METHOD_PUT())), web::METHOD_PUT()) { set ok = false }
+    if !use! harness::check_i64("web/method/delete/roundtrip", web::method_from_str(web::method_name(web::METHOD_DELETE())), web::METHOD_DELETE()) { set ok = false }
+    if !use! harness::check_i64("web/method/patch/roundtrip", web::method_from_str(web::method_name(web::METHOD_PATCH())), web::METHOD_PATCH()) { set ok = false }
+    if !use! harness::check_i64("web/method/head/roundtrip", web::method_from_str(web::method_name(web::METHOD_HEAD())), web::METHOD_HEAD()) { set ok = false }
+    if !use! harness::check_i64("web/method/options/roundtrip", web::method_from_str(web::method_name(web::METHOD_OPTIONS())), web::METHOD_OPTIONS()) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_methods_success_names: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("web/method/get", web::method_name(web::METHOD_GET()), "GET") { set ok = false }
+    if !use! harness::check_str("web/method/post", web::method_name(web::METHOD_POST()), "POST") { set ok = false }
+    if !use! harness::check_str("web/method/put", web::method_name(web::METHOD_PUT()), "PUT") { set ok = false }
+    if !use! harness::check_str("web/method/delete", web::method_name(web::METHOD_DELETE()), "DELETE") { set ok = false }
+    if !use! harness::check_str("web/method/patch", web::method_name(web::METHOD_PATCH()), "PATCH") { set ok = false }
+    if !use! harness::check_str("web/method/head", web::method_name(web::METHOD_HEAD()), "HEAD") { set ok = false }
+    if !use! harness::check_str("web/method/options", web::method_name(web::METHOD_OPTIONS()), "OPTIONS") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_methods_limit_unknown: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("web/method/unknown_name", web::method_name(99), "UNKNOWN") { set ok = false }
+    if !use! harness::check_i64("web/method/unknown_code", web::method_from_str("TRACE"), -1) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_methods_anomaly_case_sensitive: () :bool {
+    set lower = web::method_from_str("get")
+    set ok = use! harness::check_i64("web/method/lowercase", lower, -1)
+    use! harness::anomaly("web", "methods/lowercase", "get", "-1", str::from::i64(lower), lower == -1)
+    return ok
+}

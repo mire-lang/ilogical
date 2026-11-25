@@ -1,0 +1,16 @@
+[project]
+name = "web"
+entry = "mod.mire"
+
+[exports]
+client = "client"
+request = "request"
+response = "response"
+headers = "headers"
+methods = "methods"
+connection = "connection"
+transport = "transport"
+tls = "tls"
+certificates = "certificates"
+verification = "verification"
+cookies = "cookies"

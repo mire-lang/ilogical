@@ -1,0 +1,34 @@
+module ilogical
+
+// ilogical — logical data processing for Mire.
+//
+// The package is split into independent namespaces so a program only pays for
+// what it loads:
+//
+//   ilogical::base        dynamic Value, the common representation
+//   ilogical::format      json / toml / bin codecs
+//   ilogical::schema      schema definition and validation
+//   ilogical::encoding    base64 / hex / percent
+//   ilogical::url         parse / encode / resolve
+//   ilogical::web         HTTP message types and client configuration
+//
+// Every format decodes into the same base::Value, so JSON can be converted to
+// TOML or binary without an intermediate string.
+
+load ilogical::base
+load ilogical::buffer
+load ilogical::format
+load ilogical::schema
+load ilogical::encoding
+load ilogical::url
+load ilogical::web
+
+pub fn version: () :str {
+    return "0.1.0"
+}
+
+pub fn status: () :str {
+    // Kept as one literal: a `report + ...` chain this long is mis-compiled
+    // by the current optimizer (lines get reordered).
+    return "════════════════════════════════════════════════════════════════\nLibrary:      ilogical\nVersion:      0.1.0\nStatus:       experimental (pure Mire, no native codecs)\nABI:          mire >=0.15.0, abi 1\nDescription:  Logical data processing: values, formats, schemas, encoding, URLs, web message types\nRuntime:      Mire / Avenys (minimal tier)\nRegistry:     local / mor\nNamespaces:\n  ilogical::base      dynamic Value (null/bool/int/float/string/array/object/bytes/error)\n  ilogical::buffer    growable byte buffer\n  ilogical::format    JSON, TOML and binary codecs in pure Mire\n  ilogical::schema    structural schemas and validation\n  ilogical::encoding  base64, base64url, hex, percent\n  ilogical::url       parse, build, query, resolve\n  ilogical::web       methods, headers, request, response, client config, cookies\nExports:      base, buffer, format, schema, encoding, url, web\nDependencies: mire (bytes, str, vec, aux::pal)\nNative:       none\nKnown limits: web has no transport (use kioto::net); custom schema validators\n              are not supported; TOML documents are tables, so encoding a\n              non-object emits a fragment that toml_decode rejects\n════════════════════════════════════════════════════════════════\n"
+}

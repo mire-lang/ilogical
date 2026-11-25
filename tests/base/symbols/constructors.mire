@@ -1,0 +1,50 @@
+// Per-symbol suite: ilogical::base constructors and type inspection.
+//
+// Cases: success (each constructor reports its kind), limit (empty string,
+// empty array/object, zero-length blob), anomaly (a blob built from a local
+// pointer and a zero handle). The anomaly is logged because passing the
+// address of a call result instead of a local is a common crash.
+
+load ilogical
+load mire::bytes
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn constructors_success_kinds: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/kind/null", base::kind(base::null()), base::K_NULL()) { set ok = false }
+    if !use! harness::check_i64("base/kind/bool", base::kind(base::bool(true)), base::K_BOOL()) { set ok = false }
+    if !use! harness::check_i64("base/kind/int", base::kind(base::int(-7)), base::K_INT()) { set ok = false }
+    if !use! harness::check_i64("base/kind/float", base::kind(base::float(1.5 :f64)), base::K_FLOAT()) { set ok = false }
+    if !use! harness::check_i64("base/kind/string", base::kind(base::string("x")), base::K_STRING()) { set ok = false }
+    if !use! harness::check_i64("base/kind/array", base::kind(base::array()), base::K_ARRAY()) { set ok = false }
+    if !use! harness::check_i64("base/kind/object", base::kind(base::object()), base::K_OBJECT()) { set ok = false }
+    if !use! harness::check_i64("base/kind/error", base::kind(base::error("x")), base::K_ERROR()) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn constructors_limit_empty: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/string/empty_len", str::len(base::as_string(base::string(""))), 0) { set ok = false }
+    if !use! harness::check_i64("base/array/empty_len", base::array_len(base::array()), 0) { set ok = false }
+    if !use! harness::check_i64("base/object/empty_len", base::object_len(base::object()), 0) { set ok = false }
+    set buf = bytes::alloc(0)
+    set empty_blob = base::blob(buf, 0)
+    if !use! harness::check_i64("base/blob/empty_len", base::as_bytes_len(empty_blob), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn constructors_anomaly_blob_from_local: () :bool {
+    set buf = bytes::alloc(4)
+    bytes::set_u8(buf, 0, 1)
+    bytes::set_u8(buf, 1, 2)
+    bytes::set_u8(buf, 2, 3)
+    bytes::set_u8(buf, 3, 4)
+    set b = base::blob(buf, 4)
+    set ok = use! harness::check_i64("base/blob/local_len", base::as_bytes_len(b), 4)
+    use! harness::anomaly("base", "constructors/blob_from_local", "4 bytes", "4", str::from::i64(base::as_bytes_len(b)), ok)
+    return ok
+}

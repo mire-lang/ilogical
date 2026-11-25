@@ -1,0 +1,86 @@
+// Per-symbol suite: ilogical::format::toml_encode.
+//
+// Cases: success (tables, nested tables, arrays of tables, escaping), limit
+// (empty object), anomaly (TOML documents are tables: a non-object encodes as
+// an inline fragment, which is not a document and does not round-trip through
+// toml_decode; that is logged).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn toml_encode_success_table: () :bool {
+    set o = base::object() mut
+    set o = base::object_set(o, "title", base::string("hi"))
+    set o = base::object_set(o, "port", base::int(8080))
+    set o = base::object_set(o, "debug", base::bool(false))
+    set text = format::toml_encode(o)
+    set ok = true :bool mut
+    if !use! harness::check_str("format/toml_encode/string", text, "title = \"hi\"\nport = 8080\ndebug = false\n") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn toml_encode_success_nested_table: () :bool {
+    set server = base::object() mut
+    set server = base::object_set(server, "port", base::int(8080))
+    set hosts = base::array() mut
+    set hosts = base::array_push(hosts, base::string("a"))
+    set hosts = base::array_push(hosts, base::string("b"))
+    set server = base::object_set(server, "hosts", hosts)
+    set root = base::object() mut
+    set root = base::object_set(root, "server", server)
+    set text = format::toml_encode(root)
+    set ok = true :bool mut
+    if !use! harness::check("format/toml_encode/table_header", str::contains(text, "[server]")) { set ok = false }
+    if !use! harness::check("format/toml_encode/nested_int", str::contains(text, "port = 8080")) { set ok = false }
+    if !use! harness::check("format/toml_encode/array", str::contains(text, "hosts = [\"a\", \"b\"]")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn toml_encode_success_array_of_tables: () :bool {
+    set item1 = base::object() mut
+    set item1 = base::object_set(item1, "name", base::string("a"))
+    set item2 = base::object() mut
+    set item2 = base::object_set(item2, "name", base::string("b"))
+    set items = base::array() mut
+    set items = base::array_push(items, item1)
+    set items = base::array_push(items, item2)
+    set root = base::object() mut
+    set root = base::object_set(root, "items", items)
+    set text = format::toml_encode(root)
+    set ok = true :bool mut
+    if !use! harness::check("format/toml_encode/aot_header", str::contains(text, "[[items]]")) { set ok = false }
+    if !use! harness::check("format/toml_encode/aot_first", str::contains(text, "name = \"a\"")) { set ok = false }
+    if !use! harness::check("format/toml_encode/aot_second", str::contains(text, "name = \"b\"")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn toml_encode_success_quoted_keys_and_escapes: () :bool {
+    set o = base::object() mut
+    set o = base::object_set(o, "a b", base::string("line\nnext"))
+    set text = format::toml_encode(o)
+    set ok = true :bool mut
+    if !use! harness::check("format/toml_encode/quoted_key", str::contains(text, "\"a b\" = ")) { set ok = false }
+    if !use! harness::check("format/toml_encode/escaped_newline", str::contains(text, "\\n")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn toml_encode_limit_empty_object: () :bool {
+    return use! harness::check_str("format/toml_encode/empty", format::toml_encode(base::object()), "")
+}
+
+@[test]
+pub fn toml_encode_anomaly_scalar_fragment: () :bool {
+    set text = format::toml_encode(base::int(42))
+    set decoded = format::toml_decode(text)
+    set ok = true :bool mut
+    if !use! harness::check_str("format/toml_encode/scalar_fragment", text, "42\n") { set ok = false }
+    if !use! harness::check("format/toml_encode/scalar_not_document", base::is_error(decoded)) { set ok = false }
+    use! harness::anomaly("format", "toml_encode/scalar_fragment", "42", "42\\n (fragment)", text, text == "42\n")
+    return ok
+}

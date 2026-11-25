@@ -1,0 +1,74 @@
+// Per-symbol suite: ilogical::base clone.
+//
+// Cases: success (deep copy equals the source and is independent), limit
+// (empty array/object), anomaly (mutating the copy must not change the source;
+// blobs own their bytes).
+
+load ilogical
+load mire::bytes
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn clone_success_primitives: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check("base/clone/null", base::equals(base::clone(base::null()), base::null())) { set ok = false }
+    if !use! harness::check("base/clone/bool", base::equals(base::clone(base::bool(true)), base::bool(true))) { set ok = false }
+    if !use! harness::check("base/clone/int", base::equals(base::clone(base::int(42)), base::int(42))) { set ok = false }
+    if !use! harness::check("base/clone/float", base::equals(base::clone(base::float(3.14 :f64)), base::float(3.14 :f64))) { set ok = false }
+    if !use! harness::check("base/clone/string", base::equals(base::clone(base::string("test")), base::string("test"))) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn clone_success_array_and_object: () :bool {
+    set a = base::array() mut
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    set cloned_array = base::clone(a)
+    set o = base::object() mut
+    set o = base::object_set(o, "a", base::int(1))
+    set o = base::object_set(o, "b", base::string("hello"))
+    set cloned_object = base::clone(o)
+    set ok = true :bool mut
+    if !use! harness::check("base/clone/array/equals", base::equals(a, cloned_array)) { set ok = false }
+    if !use! harness::check_i64("base/clone/array/len", base::array_len(cloned_array), 2) { set ok = false }
+    if !use! harness::check("base/clone/object/equals", base::equals(o, cloned_object)) { set ok = false }
+    if !use! harness::check_str("base/clone/object/string", base::as_string(base::object_get(cloned_object, "b")), "hello") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn clone_limit_empty_containers: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/clone/empty_array", base::array_len(base::clone(base::array())), 0) { set ok = false }
+    if !use! harness::check_i64("base/clone/empty_object", base::object_len(base::clone(base::object())), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn clone_anomaly_independent_copy: () :bool {
+    set source = base::array() mut
+    set source = base::array_push(source, base::int(1))
+    set copy = base::clone(source) :i64 mut
+    set copy = base::array_push(copy, base::int(2))
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/clone/independent/source_len", base::array_len(source), 1) { set ok = false }
+    if !use! harness::check_i64("base/clone/independent/copy_len", base::array_len(copy), 2) { set ok = false }
+    use! harness::anomaly("base", "clone/push_after_copy", "source=1 copy=2", "source=1", str::from::i64(base::array_len(source)), base::array_len(source) == 1)
+    return ok
+}
+
+@[test]
+pub fn clone_success_blob: () :bool {
+    set buf = bytes::alloc(3)
+    bytes::set_u8(buf, 0, 1)
+    bytes::set_u8(buf, 1, 2)
+    bytes::set_u8(buf, 2, 3)
+    set b = base::blob(buf, 3)
+    set cloned = base::clone(b)
+    set ok = true :bool mut
+    if !use! harness::check("base/clone/blob/equals", base::equals(b, cloned)) { set ok = false }
+    if !use! harness::check_i64("base/clone/blob/len", base::as_bytes_len(cloned), 3) { set ok = false }
+    return ok
+}

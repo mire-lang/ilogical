@@ -1,0 +1,57 @@
+// Per-symbol suite: ilogical::web headers.
+//
+// Cases: success (set/get/has/count/key_at/value_at/remove), limit (empty
+// header map), anomaly (names are stored as literal keys: "Content-Type" and
+// "content-type" are different, which is logged because HTTP itself compares
+// them case-insensitively).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn web_headers_success_set_get: () :bool {
+    set h = web::headers_new() mut
+    set h = web::headers_set(h, "Content-Type", "application/json")
+    set h = web::headers_set(h, "Accept", "text/plain")
+    set ok = true :bool mut
+    if !use! harness::check_str("web/headers/get", web::headers_get(h, "Content-Type"), "application/json") { set ok = false }
+    if !use! harness::check("web/headers/has", web::headers_has(h, "Accept")) { set ok = false }
+    if !use! harness::check_false("web/headers/missing", web::headers_has(h, "X-Missing")) { set ok = false }
+    if !use! harness::check_i64("web/headers/count", web::headers_count(h), 2) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_headers_success_order_and_remove: () :bool {
+    set h = web::headers_new() mut
+    set h = web::headers_set(h, "A", "1")
+    set h = web::headers_set(h, "B", "2")
+    set ok = true :bool mut
+    if !use! harness::check_str("web/headers/key_at/0", web::headers_key_at(h, 0), "A") { set ok = false }
+    if !use! harness::check_str("web/headers/value_at/1", web::headers_value_at(h, 1), "2") { set ok = false }
+    set h = web::headers_remove(h, "A")
+    if !use! harness::check_i64("web/headers/remove_count", web::headers_count(h), 1) { set ok = false }
+    if !use! harness::check_false("web/headers/removed", web::headers_has(h, "A")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_headers_limit_empty: () :bool {
+    set h = web::headers_new()
+    set ok = true :bool mut
+    if !use! harness::check_i64("web/headers/empty_count", web::headers_count(h), 0) { set ok = false }
+    if !use! harness::check_str("web/headers/empty_get", web::headers_get(h, "Any"), "") { set ok = false }
+    if !use! harness::check_str("web/headers/empty_key", web::headers_key_at(h, 0), "") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn web_headers_anomaly_case_sensitive: () :bool {
+    set h = web::headers_new() mut
+    set h = web::headers_set(h, "Content-Type", "text/plain")
+    set lower = web::headers_has(h, "content-type")
+    set ok = use! harness::check_false("web/headers/case_sensitive", lower)
+    use! harness::anomaly("web", "headers/case_sensitive", "content-type", "false", str::from::bool(lower), !lower)
+    return ok
+}

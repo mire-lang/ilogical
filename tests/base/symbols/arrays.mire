@@ -1,0 +1,75 @@
+// Per-symbol suite: ilogical::base arrays.
+//
+// Cases: success (push/get/len preserve order and mixed kinds), limit (empty
+// array, index 0 on empty), anomaly (negative and past-the-end reads return
+// null instead of reading memory).
+
+load ilogical
+load! /tests/_support/harness
+
+@[test]
+pub fn arrays_success_push_get_len: () :bool {
+    set a = base::array() mut
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::int(2))
+    set a = base::array_push(a, base::int(3))
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/array/len", base::array_len(a), 3) { set ok = false }
+    if !use! harness::check_i64("base/array/get/0", base::as_int(base::array_get(a, 0)), 1) { set ok = false }
+    if !use! harness::check_i64("base/array/get/1", base::as_int(base::array_get(a, 1)), 2) { set ok = false }
+    if !use! harness::check_i64("base/array/get/2", base::as_int(base::array_get(a, 2)), 3) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn arrays_success_mixed_kinds: () :bool {
+    set a = base::array() mut
+    set a = base::array_push(a, base::int(1))
+    set a = base::array_push(a, base::string("hello"))
+    set a = base::array_push(a, base::float(3.14 :f64))
+    set a = base::array_push(a, base::bool(true))
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/array/mixed/int", base::as_int(base::array_get(a, 0)), 1) { set ok = false }
+    if !use! harness::check_str("base/array/mixed/string", base::as_string(base::array_get(a, 1)), "hello") { set ok = false }
+    if !use! harness::check_f64("base/array/mixed/float", base::as_float(base::array_get(a, 2)), 3.14) { set ok = false }
+    if !use! harness::check("base/array/mixed/bool", base::as_bool(base::array_get(a, 3))) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn arrays_limit_empty: () :bool {
+    set a = base::array()
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/array/empty_len", base::array_len(a), 0) { set ok = false }
+    if !use! harness::check("base/array/empty_get_null", base::is_null(base::array_get(a, 0))) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn arrays_anomaly_bounds: () :bool {
+    set a = base::array() mut
+    set a = base::array_push(a, base::int(42))
+    set negative = base::array_get(a, -1)
+    set past = base::array_get(a, 1)
+    set far = base::array_get(a, 100)
+    set ok = true :bool mut
+    if !use! harness::check("base/array/bounds/negative", base::is_null(negative)) { set ok = false }
+    if !use! harness::check("base/array/bounds/past", base::is_null(past)) { set ok = false }
+    if !use! harness::check("base/array/bounds/far", base::is_null(far)) { set ok = false }
+    use! harness::anomaly("base", "arrays/out_of_bounds", "len=1 index=1", "null", base::type_name(past), base::is_null(past))
+    return ok
+}
+
+@[test]
+pub fn arrays_success_nested: () :bool {
+    set inner = base::array() mut
+    set inner = base::array_push(inner, base::int(1))
+    set inner = base::array_push(inner, base::int(2))
+    set outer = base::array() mut
+    set outer = base::array_push(outer, inner)
+    set outer = base::array_push(outer, base::int(3))
+    set ok = true :bool mut
+    if !use! harness::check_i64("base/array/nested/outer_len", base::array_len(outer), 2) { set ok = false }
+    if !use! harness::check_i64("base/array/nested/inner_len", base::array_len(base::array_get(outer, 0)), 2) { set ok = false }
+    return ok
+}

@@ -1,0 +1,61 @@
+// Per-symbol suite: ilogical::schema array_schema.
+//
+// Cases: success (an array schema validates every item), limit (an empty array
+// always validates), anomaly (the first failing index is reported, and an
+// array schema rejects a non-array before looking at items).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn schema_array_success_all_items: () :bool {
+    set s = schema::array_schema(schema::type_schema("int"))
+    set value = base::array() mut
+    set value = base::array_push(value, base::int(1))
+    set value = base::array_push(value, base::int(2))
+    set value = base::array_push(value, base::int(3))
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/array/all_ints", schema::validate(s, value), 0) { set ok = false }
+    if !use! harness::check_str("schema/array/schema_type_name", schema::schema_type_name(s), "array") { set ok = false }
+    if !use! harness::check_i64("schema/array/schema_kind", schema::schema_kind(s), 3) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_array_success_nested: () :bool {
+    set inner = schema::array_schema(schema::type_schema("string"))
+    set outer = schema::array_schema(inner)
+    set row = base::array() mut
+    set row = base::array_push(row, base::string("a"))
+    set row = base::array_push(row, base::string("b"))
+    set matrix = base::array() mut
+    set matrix = base::array_push(matrix, row)
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/array/nested", schema::validate(outer, matrix), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_array_limit_empty: () :bool {
+    set s = schema::array_schema(schema::type_schema("int"))
+    return use! harness::check_i64("schema/array/empty", schema::validate(s, base::array()), 0)
+}
+
+@[test]
+pub fn schema_array_anomaly_first_failure_and_non_array: () :bool {
+    set s = schema::array_schema(schema::type_schema("int"))
+    set value = base::array() mut
+    set value = base::array_push(value, base::int(1))
+    set value = base::array_push(value, base::string("two"))
+    set value = base::array_push(value, base::bool(true))
+    set item_err = schema::validate(s, value)
+    set not_array = schema::validate(s, base::int(1))
+    set ok = true :bool mut
+    if !use! harness::check("schema/array/item/error", base::is_error(item_err)) { set ok = false }
+    if !use! harness::check("schema/array/item/index", str::contains(base::as_string(item_err), "item 1:")) { set ok = false }
+    if !use! harness::check("schema/array/not_array/error", base::is_error(not_array)) { set ok = false }
+    if !use! harness::check_str("schema/array/not_array/message", base::as_string(not_array), "expected array") { set ok = false }
+    use! harness::anomaly("schema", "array/item_mismatch", "[1, \"two\", true]", "error at item 1", base::as_string(item_err), base::is_error(item_err))
+    return ok
+}

@@ -1,0 +1,59 @@
+// Per-symbol suite: ilogical::schema union_schema.
+//
+// Cases: success (a union accepts a value matching any variant), limit (an
+// empty union accepts nothing), anomaly (the rejection message does not name
+// the closest variant, and variant order decides only which branch matches
+// first, not whether the value is valid).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn schema_union_success_matches_any_variant: () :bool {
+    set variants = base::array() mut
+    set variants = base::array_push(variants, schema::type_schema("int"))
+    set variants = base::array_push(variants, schema::type_schema("string"))
+    set s = schema::union_schema(variants)
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/union/int", schema::validate(s, base::int(1)), 0) { set ok = false }
+    if !use! harness::check_i64("schema/union/string", schema::validate(s, base::string("x")), 0) { set ok = false }
+    if !use! harness::check_str("schema/union/schema_type_name", schema::schema_type_name(s), "union") { set ok = false }
+    if !use! harness::check_i64("schema/union/schema_kind", schema::schema_kind(s), 4) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_union_success_nested_union: () :bool {
+    set inner = base::array() mut
+    set inner = base::array_push(inner, schema::type_schema("int"))
+    set outer_variants = base::array() mut
+    set outer_variants = base::array_push(outer_variants, schema::union_schema(inner))
+    set outer_variants = base::array_push(outer_variants, schema::type_schema("null"))
+    set s = schema::union_schema(outer_variants)
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/union/nested_int", schema::validate(s, base::int(5)), 0) { set ok = false }
+    if !use! harness::check_i64("schema/union/nested_null", schema::validate(s, base::null()), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_union_limit_empty: () :bool {
+    set s = schema::union_schema(base::array())
+    set err = schema::validate(s, base::int(1))
+    return use! harness::check("schema/union/empty/error", base::is_error(err))
+}
+
+@[test]
+pub fn schema_union_anomaly_no_variant_matches: () :bool {
+    set variants = base::array() mut
+    set variants = base::array_push(variants, schema::type_schema("int"))
+    set variants = base::array_push(variants, schema::type_schema("bool"))
+    set s = schema::union_schema(variants)
+    set err = schema::validate(s, base::string("x"))
+    set ok = true :bool mut
+    if !use! harness::check("schema/union/mismatch/error", base::is_error(err)) { set ok = false }
+    if !use! harness::check_str("schema/union/mismatch/message", base::as_string(err), "no matching variant in union") { set ok = false }
+    use! harness::anomaly("schema", "union/no_variant", "\"x\"", "error", base::as_string(err), base::is_error(err))
+    return ok
+}

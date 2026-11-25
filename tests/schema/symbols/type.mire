@@ -1,0 +1,65 @@
+// Per-symbol suite: ilogical::schema type_schema and type_name.
+//
+// Cases: success (each primitive type accepts its own kind), limit (an empty
+// type name matches nothing), anomaly (values are typed by `type_name`, so a
+// blob is "bytes" and an error is "error"; a `string` schema rejects both even
+// though `as_string` can read them).
+
+load ilogical
+load mire::bytes
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn schema_type_success_matches_kind: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/type/int", schema::validate(schema::type_schema("int"), base::int(1)), 0) { set ok = false }
+    if !use! harness::check_i64("schema/type/bool", schema::validate(schema::type_schema("bool"), base::bool(false)), 0) { set ok = false }
+    if !use! harness::check_i64("schema/type/float", schema::validate(schema::type_schema("float"), base::float(0.5 :f64)), 0) { set ok = false }
+    if !use! harness::check_i64("schema/type/string", schema::validate(schema::type_schema("string"), base::string("x")), 0) { set ok = false }
+    if !use! harness::check_i64("schema/type/null", schema::validate(schema::type_schema("null"), base::null()), 0) { set ok = false }
+    if !use! harness::check_i64("schema/type/array", schema::validate(schema::type_schema("array"), base::array()), 0) { set ok = false }
+    if !use! harness::check_i64("schema/type/object", schema::validate(schema::type_schema("object"), base::object()), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_type_success_rejects_other_kinds: () :bool {
+    set s = schema::type_schema("int")
+    set string_case = schema::validate(s, base::string("42"))
+    set ok = true :bool mut
+    if !use! harness::check("schema/type/mismatch/is_error", base::is_error(string_case)) { set ok = false }
+    if !use! harness::check("schema/type/mismatch/message", str::contains(base::as_string(string_case), "expected int, got string")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_type_success_introspection: () :bool {
+    set s = schema::type_schema("int")
+    set ok = true :bool mut
+    if !use! harness::check_str("schema/type/schema_type_name", schema::schema_type_name(s), "type") { set ok = false }
+    if !use! harness::check_str("schema/type/type_name", schema::type_name(s), "int") { set ok = false }
+    if !use! harness::check_i64("schema/type/schema_kind", schema::schema_kind(s), 1) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_type_limit_empty_name: () :bool {
+    set err = schema::validate(schema::type_schema(""), base::string(""))
+    return use! harness::check("schema/type/empty_name/error", base::is_error(err))
+}
+
+@[test]
+pub fn schema_type_anomaly_error_and_bytes_are_their_own_types: () :bool {
+    set zero = bytes::alloc(2)
+    set blob = base::blob(zero, 2)
+    set err_value = base::error("boom")
+    set string_schema = schema::type_schema("string")
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/type/bytes", schema::validate(schema::type_schema("bytes"), blob), 0) { set ok = false }
+    if !use! harness::check_i64("schema/type/error", schema::validate(schema::type_schema("error"), err_value), 0) { set ok = false }
+    if !use! harness::check("schema/type/string_rejects_error", base::is_error(schema::validate(string_schema, err_value))) { set ok = false }
+    if !use! harness::check("schema/type/string_rejects_bytes", base::is_error(schema::validate(string_schema, blob))) { set ok = false }
+    use! harness::anomaly("schema", "type/string_rejects_error", "error(boom)", "error", base::as_string(schema::validate(string_schema, err_value)), base::is_error(schema::validate(string_schema, err_value)))
+    return ok
+}

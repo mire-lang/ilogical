@@ -1,0 +1,8 @@
+[project]
+name = "format"
+entry = "mod.mire"
+
+[exports]
+json = "json"
+toml = "toml"
+bin = "bin"

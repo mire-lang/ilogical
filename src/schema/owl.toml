@@ -1,0 +1,6 @@
+[project]
+name = "schema"
+entry = "mod.mire"
+
+[exports]
+schema = "mod.mire"

@@ -1,0 +1,40 @@
+// Per-symbol suite: ilogical::format::json_encode_pretty.
+//
+// Cases: success (newlines and the requested indent), limit (empty containers
+// stay on one line), anomaly (an empty indent string falls back to two
+// spaces).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn json_pretty_success_object: () :bool {
+    set o = base::object() mut
+    set o = base::object_set(o, "a", base::int(1))
+    set o = base::object_set(o, "b", base::array())
+    set text = format::json_encode_pretty(o, "  ")
+    set ok = true :bool mut
+    if !use! harness::check("format/json_pretty/newline", str::contains(text, "\n")) { set ok = false }
+    if !use! harness::check("format/json_pretty/indent", str::contains(text, "\n  \"a\": 1")) { set ok = false }
+    if !use! harness::check_str("format/json_pretty/body", text, "{\n  \"a\": 1,\n  \"b\": []\n}") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_pretty_limit_empty: () :bool {
+    set ok = true :bool mut
+    if !use! harness::check_str("format/json_pretty/empty_array", format::json_encode_pretty(base::array(), "  "), "[]") { set ok = false }
+    if !use! harness::check_str("format/json_pretty/empty_object", format::json_encode_pretty(base::object(), "  "), "{}") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn json_pretty_anomaly_empty_indent: () :bool {
+    set a = base::array() mut
+    set a = base::array_push(a, base::int(1))
+    set text = format::json_encode_pretty(a, "")
+    set ok = use! harness::check_str("format/json_pretty/empty_indent", text, "[\n  1\n]")
+    use! harness::anomaly("format", "json_pretty/empty_indent", "\"\"", "two spaces", text, text == "[\n  1\n]")
+    return ok
+}

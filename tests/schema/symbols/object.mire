@@ -1,0 +1,82 @@
+// Per-symbol suite: ilogical::schema object_schema and object_field.
+//
+// Cases: success (required and optional fields validate by name), limit (an
+// object schema with no fields accepts every object, including an empty one),
+// anomaly (extra fields are allowed because a schema describes requirements,
+// and `object_field` on a non-object schema is a no-op rather than an error).
+
+load ilogical
+load mire::str
+load! /tests/_support/harness
+
+@[test]
+pub fn schema_object_success_required_and_optional: () :bool {
+    set s = schema::object_schema() mut
+    set s = schema::object_field(s, "name", schema::type_schema("string"), true)
+    set s = schema::object_field(s, "age", schema::type_schema("int"), false)
+    set value = base::object() mut
+    set value = base::object_set(value, "name", base::string("ana"))
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/object/optional_missing", schema::validate(s, value), 0) { set ok = false }
+    set value = base::object_set(value, "age", base::int(30))
+    if !use! harness::check_i64("schema/object/all_present", schema::validate(s, value), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_object_success_introspection: () :bool {
+    set s = schema::object_schema() mut
+    set s = schema::object_field(s, "a", schema::type_schema("int"), true)
+    set s = schema::object_field(s, "b", schema::type_schema("int"), false)
+    set ok = true :bool mut
+    if !use! harness::check_str("schema/object/schema_type_name", schema::schema_type_name(s), "object") { set ok = false }
+    if !use! harness::check_i64("schema/object/field_count", schema::object_field_count(s), 2) { set ok = false }
+    if !use! harness::check("schema/object/a_required", schema::object_field_required(s, "a")) { set ok = false }
+    if !use! harness::check_false("schema/object/b_optional", schema::object_field_required(s, "b")) { set ok = false }
+    if !use! harness::check_false("schema/object/missing_required", schema::object_field_required(s, "zzz")) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_object_limit_empty_schema: () :bool {
+    set s = schema::object_schema()
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/object/empty_schema_empty_object", schema::validate(s, base::object()), 0) { set ok = false }
+    if !use! harness::check_i64("schema/object/empty_schema_any_field", schema::validate(s, base::object_set(base::object(), "x", base::int(1))), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn schema_object_anomaly_missing_and_wrong_type: () :bool {
+    set s = schema::object_schema() mut
+    set s = schema::object_field(s, "name", schema::type_schema("string"), true)
+    set s = schema::object_field(s, "age", schema::type_schema("int"), true)
+    set missing = schema::validate(s, base::object())
+    set wrong = base::object() mut
+    set wrong = base::object_set(wrong, "name", base::string("ana"))
+    set wrong = base::object_set(wrong, "age", base::string("thirty"))
+    set mismatch = schema::validate(s, wrong)
+    set ok = true :bool mut
+    if !use! harness::check("schema/object/missing/error", base::is_error(missing)) { set ok = false }
+    if !use! harness::check("schema/object/missing/message", str::contains(base::as_string(missing), "missing required field")) { set ok = false }
+    if !use! harness::check("schema/object/mismatch/message", str::contains(base::as_string(mismatch), "field age:")) { set ok = false }
+    use! harness::anomaly("schema", "object/missing_required", "{}", "error", base::as_string(missing), base::is_error(missing))
+    return ok
+}
+
+@[test]
+pub fn schema_object_anomaly_extra_fields_and_noop: () :bool {
+    set s = schema::object_schema() mut
+    set s = schema::object_field(s, "known", schema::type_schema("int"), true)
+    set value = base::object() mut
+    set value = base::object_set(value, "known", base::int(1))
+    set value = base::object_set(value, "extra", base::string("ignored"))
+    set not_object = schema::type_schema("int")
+    set unchanged = schema::object_field(not_object, "x", schema::any(), true)
+    set ok = true :bool mut
+    if !use! harness::check_i64("schema/object/extra_allowed", schema::validate(s, value), 0) { set ok = false }
+    if !use! harness::check_i64("schema/object/field_on_non_object_kind", schema::schema_kind(unchanged), 1) { set ok = false }
+    if !use! harness::check_false("schema/object/field_on_non_object_has_field", base::object_has(unchanged, "fields")) { set ok = false }
+    use! harness::anomaly("schema", "object/extra_field", "{known, extra}", "0", str::from::i64(schema::validate(s, value)), schema::validate(s, value) == 0)
+    return ok
+}

@@ -1,0 +1,65 @@
+// Per-symbol suite: ilogical::encoding hex.
+//
+// Cases: success (lowercase output, mixed-case input), limit (empty input),
+// anomaly (odd length and non-hex digits return an error value).
+
+load ilogical
+load mire::bytes
+load mire::str
+load! /tests/_support/harness
+
+fn text_bytes: (s :&str) :ptr {
+    set n = bytes::str_len(s)
+    set buf = bytes::alloc(n)
+    set i = 0 :i64 mut
+    while i < n {
+        bytes::set_u8(buf, i, bytes::get_str_u8(s, i))
+        set i = i + 1
+    }
+    return buf
+}
+
+@[test]
+pub fn hex_success_encode: () :bool {
+    set buf = text_bytes("any")
+    return use! harness::check_str("encoding/hex/encode_any", encoding::hex_encode(buf, 3), "616e79")
+}
+
+@[test]
+pub fn hex_success_decode: () :bool {
+    set decoded = encoding::hex_decode("616E79")
+    set ok = true :bool mut
+    if !use! harness::check("encoding/hex/decode_is_bytes", base::is_bytes(decoded)) { set ok = false }
+    if !use! harness::check_i64("encoding/hex/decode_len", base::as_bytes_len(decoded), 3) { set ok = false }
+    if !use! harness::check_str("encoding/hex/decode_text", bytes::to_str(base::as_bytes_ptr(decoded), base::as_bytes_len(decoded)), "any") { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn hex_success_roundtrip: () :bool {
+    set buf = text_bytes("hello")
+    set encoded = encoding::hex_encode(buf, 5)
+    set decoded = encoding::hex_decode(encoded)
+    return use! harness::check_str("encoding/hex/roundtrip", bytes::to_str(base::as_bytes_ptr(decoded), base::as_bytes_len(decoded)), "hello")
+}
+
+@[test]
+pub fn hex_limit_empty: () :bool {
+    set zero = bytes::alloc(0)
+    set ok = true :bool mut
+    if !use! harness::check_str("encoding/hex/encode_empty", encoding::hex_encode(zero, 0), "") { set ok = false }
+    if !use! harness::check_i64("encoding/hex/decode_empty", base::as_bytes_len(encoding::hex_decode("")), 0) { set ok = false }
+    return ok
+}
+
+@[test]
+pub fn hex_anomaly_invalid_input: () :bool {
+    set odd = encoding::hex_decode("abc")
+    set digit = encoding::hex_decode("zz")
+    set ok = true :bool mut
+    if !use! harness::check("encoding/hex/odd/error", base::is_error(odd)) { set ok = false }
+    if !use! harness::check("encoding/hex/digit/error", base::is_error(digit)) { set ok = false }
+    if !use! harness::check("encoding/hex/odd/message", str::contains(base::as_string(odd), "hex")) { set ok = false }
+    use! harness::anomaly("encoding", "hex/odd_length", "abc", "error", base::as_string(odd), base::is_error(odd))
+    return ok
+}
